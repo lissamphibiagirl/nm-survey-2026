@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Fish Trap Survey</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#1c1a14">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app-shell">
+
+  <div class="status-bar" id="status-bar">
+    <span class="status-dot offline" id="status-dot"></span>
+    <span class="status-text" id="status-text">Checking connection...</span>
+    <span class="status-pending" id="status-pending"></span>
+    <button class="sync-now-btn" id="sync-now-btn" onclick="manualSync()">Sync now</button>
+  </div>
+  <div id="last-synced-row"></div>
+  <div id="sync-issues-slot"></div>
+
+  <!-- hidden bridges for file inputs -->
+  <input type="file" id="deploy-noop" style="display:none">
+  <input type="file" id="species-photo-input" accept="image/*" capture="environment" style="display:none">
+  <input type="file" id="mudpuppy-photo-input" accept="image/*" capture="environment" style="display:none">
+  <input type="file" id="bycatch-photo-input" accept="image/*" capture="environment" style="display:none">
+  <input type="file" id="mp-detail-photo-input" accept="image/*" capture="environment" style="display:none">
+
+  <!-- HOME -->
+  <div id="screen-home" class="screen active">
+    <div class="mode-bar">
+      <button class="mode-pill active-deploy" id="pill-deploy" onclick="switchMode('deploy')">Deploy</button>
+      <button class="mode-pill" id="pill-checkin" onclick="switchMode('checkin')">Check-in</button>
+      <button class="mode-pill" id="pill-mudpuppies" onclick="switchMode('mudpuppies')">Mudpuppies</button>
+    </div>
+    <div id="view-deploy">
+      <div class="hero deploy">
+        <div class="hero-eyebrow">Trap Deployment</div>
+        <div class="hero-title">Deploy Trap</div>
+        <div class="hero-sub">Record location and time at deployment</div>
+      </div>
+      <div style="padding:0 1.1rem;">
+        <span class="trap-list-lbl">Deployed today</span>
+        <div id="ui-deploy-list"></div>
+        <button class="add-trap-btn" onclick="showScreen('screen-deploy-form')">+ Deploy new trap</button>
+        <button class="clear-survey-btn" onclick="showClearConfirm()">Clear all traps / new survey week</button>
+        <div id="ui-clear-confirm"></div>
+      </div>
+    </div>
+    <div id="view-checkin" style="display:none;">
+      <div class="hero checkin">
+        <div class="hero-eyebrow">Trap Check-in</div>
+        <div class="hero-title">Process Catch</div>
+        <div class="hero-sub">Select a deployed trap to record catch data</div>
+      </div>
+      <div style="padding:0 1.1rem;">
+        <span class="trap-list-lbl">Ready to check</span>
+        <div id="ui-checkin-list"></div>
+        <div id="ui-done-list"></div>
+      </div>
+    </div>
+    <div id="view-mudpuppies" style="display:none;">
+      <div class="hero mudpuppy">
+        <div class="hero-eyebrow">Mudpuppy Records</div>
+        <div class="hero-title">Individual Metadata</div>
+        <div class="hero-sub">Select an individual to record morphometric and sample data</div>
+      </div>
+      <div style="padding:0 1.1rem;">
+        <div id="ui-mudpuppy-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DEPLOY FORM -->
+  <div id="screen-deploy-form" class="screen">
+    <button class="back-btn deploy" onclick="showScreen('screen-home')">&lt; Back</button>
+    <div class="hero deploy" style="margin-top:.2rem;">
+      <div class="hero-eyebrow">Deploy Trap</div>
+      <div class="hero-title">Trap Location</div>
+      <div class="hero-sub">Trap number, GPS, and time are required; everything else is optional</div>
+    </div>
+    <div class="field-block" style="margin-top:.85rem;">
+      <span class="sec-label">Trap Number *</span>
+      <div class="custom-select">
+        <div class="select-trigger" id="trigger-deploy-trap" onclick="toggleDd('dd-deploy-trap', this)">
+          <span id="val-deploy-trap">Select trap...</span><span class="select-arrow">v</span>
+        </div>
+        <div class="select-dropdown" id="dd-deploy-trap"></div>
+      </div>
+    </div>
+    <div class="field-block">
+      <span class="sec-label">Survey Site</span>
+      <div class="ws-chips" id="deploy-site-chips"></div>
+    </div>
+    <div class="two-col">
+      <div class="dt-cell"><div class="dt-cell-lbl">Deploy date</div><div class="dt-cell-val" id="d-deploy-date">--</div></div>
+      <div class="dt-cell"><div class="dt-cell-lbl">Deploy time</div><div class="dt-cell-val" id="d-deploy-time">--:--</div></div>
+    </div>
+    <div class="field-block">
+      <span class="sec-label">GPS Coordinates *</span>
+      <div class="gps-btn" id="gps-btn-deploy" onclick="captureGPS('deploy')">
+        <div class="gps-ico" id="gps-ico-deploy">GPS</div>
+        <div class="gps-txt">
+          <div class="gps-main" id="gps-main-deploy">Tap to record coordinates</div>
+          <div class="gps-sub" id="gps-sub-deploy">Uses device GPS</div>
+        </div>
+        <span class="gps-tick" id="gps-tick-deploy" style="opacity:0">OK</span>
+      </div>
+    </div>
+    <div class="field-block">
+      <span class="sec-label">Notes (optional)</span>
+      <textarea class="notes-ta" id="deploy-notes" rows="2" placeholder="Habitat description, bait used, trap depth..."></textarea>
+    </div>
+    <div id="ui-deploy-error"></div>
+    <div class="submit-wrap">
+      <button class="primary-btn btn-deploy" onclick="submitDeploy()">Log Deployment</button>
+    </div>
+    <div id="ui-deploy-success"></div>
+  </div>
+
+  <!-- DEPLOY DETAIL -->
+  <div id="screen-deploy-detail" class="screen">
+    <button class="back-btn deploy" onclick="showScreen('screen-home')">&lt; Deployments</button>
+    <div id="ui-deploy-detail"></div>
+  </div>
+
+  <!-- CHECK-IN FORM -->
+  <div id="screen-checkin-form" class="screen">
+    <button class="back-btn checkin" onclick="showScreen('screen-home')">&lt; Trap list</button>
+    <div id="ui-checkin-hero"></div>
+    <div class="field-block" style="margin-top:.85rem;">
+      <span class="sec-label">Soak Time</span>
+      <div class="soak-card">
+        <div class="soak-icon">SOAK</div>
+        <div class="soak-info"><div class="soak-lbl">Set -&gt; Checked</div><div class="soak-val" id="d-soak-val">Calculating...</div></div>
+        <div class="soak-badge" id="d-soak-badge">--</div>
+      </div>
+    </div>
+    <div class="two-col">
+      <div class="dt-cell"><div class="dt-cell-lbl">Check-in date</div><div class="dt-cell-val" id="d-checkin-date">--</div></div>
+      <div class="dt-cell"><div class="dt-cell-lbl">Check-in time</div><div class="dt-cell-val" id="d-checkin-time">--:--</div></div>
+    </div>
+    <div class="divider"></div>
+    <div class="field-block">
+      <span class="sec-label">Water Conditions</span>
+      <div class="cond-grid">
+        <div><span class="cond-sub-lbl">Clarity</span>
+          <div class="cond-tap-row">
+            <div class="cond-tap active" data-val="clear" onclick="pickCond(this,'clarity')">Clear</div>
+            <div class="cond-tap" data-val="turbid" onclick="pickCond(this,'clarity')">Turbid</div>
+            <div class="cond-tap" data-val="murky" onclick="pickCond(this,'clarity')">Murky</div>
+          </div></div>
+        <div><span class="cond-sub-lbl">Weather</span>
+          <div class="cond-tap-row">
+            <div class="cond-tap active" data-val="sunny" onclick="pickCond(this,'weather')">Sunny</div>
+            <div class="cond-tap" data-val="overcast" onclick="pickCond(this,'weather')">Overcast</div>
+            <div class="cond-tap" data-val="rain" onclick="pickCond(this,'weather')">Rain</div>
+          </div></div>
+      </div>
+      <div class="temp-row">
+        <div class="temp-wrap"><input type="number" inputmode="decimal" class="temp-input" id="temp-input" value="14"><span class="temp-unit">C</span></div>
+        <span class="temp-lbl">water temperature</span>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="field-block">
+      <span class="sec-label">Mudpuppy Captured?</span>
+      <div class="cond-tap-row">
+        <div class="cond-tap active" id="mp-tap-no" onclick="setMudpuppyCaught(false)">No</div>
+        <div class="cond-tap" id="mp-tap-yes" onclick="setMudpuppyCaught(true)">Yes</div>
+      </div>
+      <div id="mudpuppy-detail" style="display:none;margin-top:.65rem;">
+        <span class="cond-sub-lbl">Number of individuals</span>
+        <div class="sp-ctr" style="justify-content:flex-start;gap:.7rem;">
+          <button class="ctr-btn" onclick="changeMudpuppyCount(-1)">-</button>
+          <span class="ctr-val" id="mp-count-val">1</span>
+          <button class="ctr-btn" onclick="changeMudpuppyCount(1)">+</button>
+        </div>
+        <p style="font-size:.7rem;color:var(--parch3);margin-top:.5rem;line-height:1.5;">
+          Photographs and metadata (sex, mass, SVL, glochidia status, vial/tag IDs) are
+          recorded later from the Mudpuppies tab, at the point each individual is processed.</p>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="field-block">
+      <span class="sec-label">Fish Bycatch Captured?</span>
+      <div class="cond-tap-row">
+        <div class="cond-tap active" id="bc-tap-no" onclick="setBycatchCaught(false)">No</div>
+        <div class="cond-tap" id="bc-tap-yes" onclick="setBycatchCaught(true)">Yes</div>
+      </div>
+      <div id="bycatch-detail" style="display:none;margin-top:.65rem;">
+        <span class="cond-sub-lbl">Number of individuals</span>
+        <div class="sp-ctr" style="justify-content:flex-start;gap:.7rem;margin-bottom:.6rem;">
+          <button class="ctr-btn" onclick="changeBycatchCount(-1)">-</button>
+          <span class="ctr-val" id="bc-count-val">1</span>
+          <button class="ctr-btn" onclick="changeBycatchCount(1)">+</button>
+        </div>
+        <span class="cond-sub-lbl">Photograph each individual for automated species identification</span>
+        <div id="bycatch-photo-slots"></div>
+        <p style="font-size:.7rem;color:var(--parch3);margin-top:.3rem;line-height:1.5;">
+          Each photograph is added to Species Caught below with a suggested species —
+          tap the name on its card to confirm, or reassign it if the suggestion is incorrect.</p>
+      </div>
+    </div>
+    <div class="divider"></div>
+    <div class="field-block">
+      <div class="sp-header">
+        <span class="sec-label" style="margin-bottom:0;">Species Caught *</span>
+        <div style="display:flex;gap:.35rem;">
+          <span class="sp-photo-btn" onclick="triggerSpeciesPhoto()">Photo ID</span>
+          <span class="sp-add-btn" onclick="openSheet()">+ Add</span>
+        </div>
+      </div>
+      <div id="recent-sp-slot"></div>
+      <div id="ai-banner-slot"></div>
+      <div id="checkin-sp-list"></div>
+    </div>
+    <div class="catch-total">
+      <span class="ct-lbl">Total catch</span>
+      <span class="ct-val" id="checkin-total-val">0 fish | 0 species</span>
+    </div>
+    <div class="field-block">
+      <span class="sec-label">Notes</span>
+      <textarea class="notes-ta" id="checkin-notes" rows="2" placeholder="Anomalies, recaptures, incidental observations..."></textarea>
+    </div>
+    <div class="field-block">
+      <span class="sec-label">Observer</span>
+      <input type="text" class="text-input" id="observer-name" placeholder="e.g. J. Smith" autocomplete="off">
+    </div>
+    <div id="ui-checkin-error"></div>
+    <div class="submit-wrap">
+      <button class="primary-btn btn-checkin" onclick="submitCheckin()">Submit Check-in</button>
+    </div>
+    <div id="ui-checkin-success"></div>
+  </div>
+
+  <!-- MUDPUPPY DETAIL / METADATA EDITOR -->
+  <div id="screen-mudpuppy-detail" class="screen">
+    <button class="back-btn checkin" onclick="showScreen('screen-home');switchMode('mudpuppies');">&lt; Mudpuppies</button>
+    <div id="ui-mudpuppy-detail"></div>
+  </div>
+
+  <!-- SPECIES PICKER SHEET -->
+  <div class="sheet-overlay" id="sheet-overlay" onclick="overlayClick(event)">
+    <div class="species-sheet">
+      <div class="sheet-handle"></div>
+      <div class="sheet-title">Add Species</div>
+      <div class="sheet-photo-cta" onclick="closeSheet();triggerSpeciesPhoto();">Identify from a photograph instead</div>
+      <div class="sheet-search-wrap">
+        <input class="sheet-search" id="sheet-search" type="text" placeholder="Search by name..." oninput="filterSheet()" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="sheet-tabs" id="sheet-tabs"></div>
+      <div class="sheet-list" id="sheet-list"></div>
+      <button class="sheet-close-btn" onclick="closeSheet()">Done</button>
+    </div>
+  </div>
+
+  <div id="toast-slot"></div>
+</div>
+
+<script src="config.js"></script>
+<script src="db.js"></script>
+<script src="species-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
