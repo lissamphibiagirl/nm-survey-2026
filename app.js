@@ -812,62 +812,104 @@ window.confirmClear=confirmClear;
 // ============================================================
 // SERVER COMMUNICATION
 // ============================================================
+function getAppsScriptUrl(){
+  if(!CFG||!CFG.APPS_SCRIPT_URL||CFG.APPS_SCRIPT_URL.includes("PASTE_YOUR"))
+    throw new Error("Apps Script URL is not configured in config.js.");
+  return CFG.APPS_SCRIPT_URL;
+}
+async function fetchServerJson(url,options){
+  const resp=await fetch(url,options);
+  if(!resp.ok) throw new Error(`Apps Script returned HTTP ${resp.status}.`);
+  try{ return await resp.json(); }
+  catch(e){ throw new Error("Apps Script returned an unreadable response. Check the web app deployment and permissions."); }
+}
 async function callServer(action,payload){
-  if(!CFG.APPS_SCRIPT_URL||CFG.APPS_SCRIPT_URL.includes("PASTE_YOUR"))
-    throw new Error("Apps Script URL not configured — edit config.js");
-  const resp=await fetch(CFG.APPS_SCRIPT_URL,{
+  return fetchServerJson(getAppsScriptUrl(),{
     method:"POST",
     headers:{"Content-Type":"text/plain;charset=utf-8"},
     body:JSON.stringify({action,payload})
   });
-  return resp.json();
 }
 async function refreshFromServer(){
   try{
-    const resp=await fetch(CFG.APPS_SCRIPT_URL+"?action=today");
-    const data=await resp.json();
-    if(data&&data.ok){ serverToday={deployments:data.deployments||[],checkins:data.checkins||[]}; await DB.cacheServer(serverToday); }
-  }catch(e){}
+    const data=await fetchServerJson(getAppsScriptUrl()+"?action=today");
+    if(data&&data.ok){ serverToday={deployments:data.deployments||[],checkins:data.checkins||[]}; await DB.cacheServer(serverToday); return {ok:true}; }
+    return {ok:false,message:(data&&data.message)||"Apps Script did not return today's survey data."};
+  }catch(e){ return {ok:false,message:e.message||"Could not load today's survey data."}; }
 }
 async function refreshMudpuppiesFromServer(){
   try{
-    const resp=await fetch(CFG.APPS_SCRIPT_URL+"?action=mudpuppies");
-    const data=await resp.json();
-    if(data&&data.ok) await DB.cacheMudpuppies(data.mudpuppies||[]);
-  }catch(e){}
+    const data=await fetchServerJson(getAppsScriptUrl()+"?action=mudpuppies");
+    if(data&&data.ok){ await DB.cacheMudpuppies(data.mudpuppies||[]); return {ok:true}; }
+    return {ok:false,message:(data&&data.message)||"Apps Script did not return mudpuppy records."};
+  }catch(e){ return {ok:false,message:e.message||"Could not load mudpuppy records."}; }
 }
 
-async function trySyncAll(){
-  if(!navigator.onLine){ await updateStatusBar(); return; }
-  let networkDown=false;
+async function trySyncAll(options={}){
+  const force=options.force===true;
+  if(!navigator.onLine){ await updateStatusBar(); return {ok:false,message:"You are offline. Saved records will sync when you reconnect."}; }
+  let networkDown=false, syncError="", rejected=0, refreshError="";
   async function syncStore(getAll,addBack,remove,action,idKey){
     if(networkDown) return;
     const items=await getAll();
     for(const item of items){
       if(networkDown) break;
-      if(item._syncError&&item._lastAttempt&&(Date.now()-new Date(item._lastAttempt).getTime())<30000) continue;
+      if(!force&&item._syncError&&item._lastAttempt&&(Date.now()-new Date(item._lastAttempt).getTime())<30000) continue;
       try{
         const resp=await callServer(action,item);
         if(resp&&resp.ok){ await remove(item[idKey]); }
-        else await addBack({...item,_syncError:(resp&&resp.message)||"Server rejected record.",_lastAttempt:nowISO()});
-      }catch(e){ networkDown=true; await addBack({...item,_lastAttempt:nowISO()}); }
+        else{
+          const message=(resp&&resp.message)||"Server rejected record.";
+          rejected++; if(!syncError) syncError=message;
+          await addBack({...item,_syncError:message,_lastAttempt:nowISO()});
+        }
+      }catch(e){
+        networkDown=true;
+        const message=e.message||"Could not reach Apps Script.";
+        if(!syncError) syncError=message;
+        await addBack({...item,_syncError:message,_lastAttempt:nowISO()});
+      }
     }
   }
   await syncStore(DB.getPendingDeployments,DB.addPendingDeployment,DB.removePendingDeployment,"deploy","ref_id");
   await syncStore(DB.getPendingCheckins,   DB.addPendingCheckin,   DB.removePendingCheckin,   "checkin","ref_id");
   await syncStore(DB.getPendingMudpuppies, DB.addPendingMudpuppy,  DB.removePendingMudpuppy,  "mudpuppySave","id");
   if(!networkDown){
-    await refreshFromServer(); await refreshMudpuppiesFromServer();
-    try{ localStorage.setItem("fishtrap_last_sync",Date.now().toString()); }catch(e){}
+    const todayResult=await refreshFromServer();
+    const mudpuppyResult=await refreshMudpuppiesFromServer();
+    if(!todayResult.ok) refreshError=todayResult.message;
+    else if(!mudpuppyResult.ok) refreshError=mudpuppyResult.message;
   }
   await updateStatusBar(); await renderHome();
   if(document.getElementById("view-mudpuppies").style.display!=="none") renderMudpuppyList();
+  const pendingLists=await Promise.all([DB.getPendingDeployments(),DB.getPendingCheckins(),DB.getPendingMudpuppies()]);
+  const pendingCount=pendingLists.reduce((sum,list)=>sum+list.length,0);
+  const ok=!networkDown&&rejected===0&&!refreshError&&pendingCount===0;
+  if(ok){ try{ localStorage.setItem("fishtrap_last_sync",Date.now().toString()); }catch(e){} }
+  let message="";
+  if(networkDown) message=syncError||"Could not reach Apps Script.";
+  else if(rejected) message=syncError||`${rejected} record(s) were rejected by Apps Script.`;
+  else if(refreshError) message=refreshError;
+  else if(pendingCount){
+    const firstIssue=pendingLists.flat().find(item=>item._syncError);
+    message=(firstIssue&&firstIssue._syncError)||`${pendingCount} record(s) are still pending.`;
+  }
+  return {ok,message,pending:pendingCount};
 }
 
 async function manualSync(){
   const btn=$("sync-now-btn"); if(!btn||btn.classList.contains("syncing")) return;
   btn.classList.add("syncing"); btn.textContent="Syncing...";
-  await trySyncAll(); btn.classList.remove("syncing"); btn.textContent="Sync now";
+  try{
+    const result=await trySyncAll({force:true});
+    if(!result.ok) throw new Error(result.message||`${result.pending||"Some"} record(s) are still pending.`);
+    toast("Sync complete.");
+  }catch(e){
+    console.error("Manual sync failed:",e);
+    toast("Sync failed: "+(e.message||"Unknown error."),6000);
+  }finally{
+    btn.classList.remove("syncing"); btn.textContent="Sync now";
+  }
 }
 window.manualSync=manualSync;
 
