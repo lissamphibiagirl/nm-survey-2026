@@ -449,6 +449,7 @@ button:focus-visible, .trap-card:focus-visible, .select-trigger:focus-visible, .
   padding: .7rem 1rem calc(.9rem + env(safe-area-inset-bottom));
   background: linear-gradient(to top, var(--bg) 65%, transparent); margin-top: .35rem; }
 .primary-btn { box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+.primary-btn:disabled { opacity: .55; cursor: wait; }
 .action-btn { width: 100%; height: 46px; border: none; border-radius: var(--r);
   font-family: var(--sans); font-size: .9rem; font-weight: 700; cursor: pointer;
   display: flex; align-items: center; justify-content: center; margin-bottom: .45rem; }
@@ -464,6 +465,10 @@ button:focus-visible, .trap-card:focus-visible, .select-trigger:focus-visible, .
 .success-title.deploy-color  { color: var(--water-lt); }
 .success-title.checkin-color { color: var(--moss-lt); }
 .success-sub  { font-size: .78rem; color: var(--ink3); margin-bottom: 1rem; line-height: 1.6; }
+.upload-confirmed, .upload-pending { border-radius: var(--r); padding: .75rem .85rem; margin: .45rem 0 .85rem;
+  font-size: .8rem; line-height: 1.55; }
+.upload-confirmed { background: rgba(88,125,79,.12); border: 1px solid rgba(88,125,79,.45); color: var(--moss-lt); }
+.upload-pending { background: var(--amber-bg); border: 1px solid rgba(190,139,52,.42); color: var(--amber-lt); }
 .success-card { background: var(--bg2); border: 1px solid var(--rule); border-radius: var(--r);
   padding: .65rem .85rem; margin-bottom: 1rem; }
 .success-row  { display: flex; justify-content: space-between; font-size: .84rem;

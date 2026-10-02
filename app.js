@@ -21,7 +21,10 @@ let _photoTargetId = null;    // species card id waiting for a photo
 
 let serverToday = { deployments: [], checkins: [] };
 let _syncInFlight = null;
+let _syncAgain = false;
 let _lastSyncError = "";
+let _checkinSubmitting = false;
+let _checkinReceipt = null;
 
 // ── helpers ────────────────────────────────────────────────
 function pad(n){ return String(n).padStart(2,"0"); }
@@ -134,7 +137,7 @@ function buildSiteChips(){
 // ── form state ─────────────────────────────────────────────
 const state={
   deployTrap:"",deploySite:"",deployGpsLat:"",deployGpsLng:"",
-  checkinTrapId:"",checkinGpsLat:"",checkinGpsLng:"",
+  checkinTrapId:"",checkinDeployRefId:"",checkinGpsLat:"",checkinGpsLng:"",
   condClarity:"clear",condWeather:"sunny"
 };
 
@@ -516,17 +519,19 @@ window.triggerMpDetailPhoto=triggerMpDetailPhoto;
 // ============================================================
 async function mergedDeployments(){
   const pending=await DB.getPendingDeployments(),server=serverToday.deployments||[];
-  const byTrap={};
-  server.forEach(d=>byTrap[d.trap_id]={...d,_pending:false});
-  pending.forEach(d=>byTrap[d.trap_id]={...d,_pending:true});
-  return Object.values(byTrap);
+  const byRef={};
+  const key=d=>d.ref_id||`${d.trap_id}:${d.deploy_date||""}:${d.deploy_time||""}`;
+  server.forEach(d=>byRef[key(d)]={...d,_pending:false});
+  pending.forEach(d=>byRef[key(d)]={...d,_pending:true});
+  return Object.values(byRef).sort((a,b)=>`${b.deploy_date||""} ${b.deploy_time||""}`.localeCompare(`${a.deploy_date||""} ${a.deploy_time||""}`));
 }
 async function mergedCheckins(){
   const pending=await DB.getPendingCheckins(),server=serverToday.checkins||[];
-  const byTrap={};
-  server.forEach(c=>byTrap[c.trap_id]={...c,_pending:false});
-  pending.forEach(c=>byTrap[c.trap_id]={...c,_pending:true});
-  return Object.values(byTrap);
+  const byRef={};
+  const key=c=>c.ref_id||`${c.trap_id}:${c.checkin_date||""}:${c.checkin_time||""}`;
+  server.forEach(c=>byRef[key(c)]={...c,_pending:false});
+  pending.forEach(c=>byRef[key(c)]={...c,_pending:true});
+  return Object.values(byRef).sort((a,b)=>`${b.checkin_date||""} ${b.checkin_time||""}`.localeCompare(`${a.checkin_date||""} ${a.checkin_time||""}`));
 }
 
 // ============================================================
@@ -534,45 +539,47 @@ async function mergedCheckins(){
 // ============================================================
 async function renderHome(){
   const deps=await mergedDeployments(),checks=await mergedCheckins();
-  const doneIds=new Set(checks.map(c=>c.trap_id));
+  const doneRefs=new Set(checks.map(c=>c.deployment_ref_id).filter(Boolean));
+  const doneTrapDates=new Set(checks.map(c=>`${c.trap_id}:${c.checkin_date||""}`));
+  const isDone=d=>doneRefs.has(d.ref_id)||doneTrapDates.has(`${d.trap_id}:${d.deploy_date||""}`);
   const dl=$("ui-deploy-list");
   if(!deps.length){
-    dl.innerHTML=`<div class="empty-state"><div class="empty-state-text">No traps deployed today.<br>Tap "+ Deploy new trap" to begin.</div></div>`;
+    dl.innerHTML=`<div class="empty-state"><div class="empty-state-text">No traps in this survey yet.<br>Tap "+ Deploy new trap" to begin.</div></div>`;
   } else {
     dl.innerHTML="";
     deps.forEach(d=>{
-      const done=doneIds.has(d.trap_id),em=elapsedMins(d.deploy_time);
+      const done=isDone(d),em=(d.deploy_date&&d.deploy_date!==todayISO())?null:elapsedMins(d.deploy_time);
       const card=document.createElement("div"); card.className="trap-card "+(done?"st-done":"st-deployed");
-      card.onclick=()=>{ state.viewTrap=d.trap_id; renderDeployDetail(d.trap_id); showScreen("screen-deploy-detail"); };
+      card.onclick=()=>{ state.viewTrap=d.trap_id; renderDeployDetail(d.ref_id); showScreen("screen-deploy-detail"); };
       card.innerHTML=`<div class="trap-card-inner">
         <div class="trap-status-dot ${done?"dot-done":"dot-deployed"}"></div>
         <div class="trap-card-info">
           <div class="trap-card-id">Trap ${d.trap_id}</div>
-          <div class="trap-card-meta">${d.site||""} | ${d.deploy_time}${d.gps_lat?` | ${d.gps_lat}, ${d.gps_lng}`:""}</div>
+          <div class="trap-card-meta">${d.site||""} | ${d.deploy_date||""} ${d.deploy_time||""}${d.gps_lat?` | ${d.gps_lat}, ${d.gps_lng}`:""}</div>
         </div>
-        ${done?`<div class="trap-badge-done">Done</div>`:`<div class="trap-badge-soak">${fmtSoak(em)}</div>`}
+        ${done?`<div class="trap-badge-done">Done</div>`:`<div class="trap-badge-soak">${em===null?"Awaiting check-in":fmtSoak(em)}</div>`}
         ${d._pending?`<div class="trap-badge-pending">sync pending</div>`:""}
         <div class="trap-card-arrow">›</div>
       </div>`;
       dl.appendChild(card);
     });
   }
-  const cl=$("ui-checkin-list"),pendingTraps=deps.filter(d=>!doneIds.has(d.trap_id));
+  const cl=$("ui-checkin-list"),pendingTraps=deps.filter(d=>!isDone(d));
   if(!pendingTraps.length){
-    cl.innerHTML=`<div class="empty-state"><div class="empty-state-text">${deps.length?"All deployed traps have been checked in.":"No active deployments — switch to Deploy first."}</div></div>`;
+    cl.innerHTML=`<div class="empty-state"><div class="empty-state-text">${deps.length?"All deployed traps have been checked in.":"No deployments yet — switch to Deploy first."}</div></div>`;
   } else {
     cl.innerHTML="";
     pendingTraps.forEach(d=>{
-      const em=elapsedMins(d.deploy_time);
+      const em=(d.deploy_date&&d.deploy_date!==todayISO())?null:elapsedMins(d.deploy_time);
       const card=document.createElement("div"); card.className="trap-card st-deployed";
-      card.onclick=()=>startCheckin(d.trap_id);
+      card.onclick=()=>startCheckin(d.ref_id);
       card.innerHTML=`<div class="trap-card-inner">
         <div class="trap-status-dot dot-deployed"></div>
         <div class="trap-card-info">
           <div class="trap-card-id">Trap ${d.trap_id}</div>
-          <div class="trap-card-meta">${d.site||""} | deployed ${d.deploy_time}${d.gps_lat?` | ${d.gps_lat}, ${d.gps_lng}`:""}</div>
+          <div class="trap-card-meta">${d.site||""} | deployed ${d.deploy_date||""} ${d.deploy_time||""}${d.gps_lat?` | ${d.gps_lat}, ${d.gps_lng}`:""}</div>
         </div>
-        <div class="trap-badge-soak">${fmtSoak(em)}</div>
+        <div class="trap-badge-soak">${em===null?"Ready":fmtSoak(em)}</div>
         <div class="trap-card-arrow">›</div>
       </div>`;
       cl.appendChild(card);
@@ -581,14 +588,14 @@ async function renderHome(){
   const dn=$("ui-done-list");
   if(!checks.length){ dn.innerHTML=""; } else {
     const mudpuppies=await mergedMudpuppies();
-    dn.innerHTML=`<span class="trap-list-lbl" style="margin-top:.55rem;display:block;">Completed today</span>`;
+    dn.innerHTML=`<span class="trap-list-lbl" style="margin-top:.55rem;display:block;">Completed check-ins</span>`;
     checks.forEach(c=>{
       const mpForTrap=mudpuppies.filter(m=>m.trap_id===c.trap_id);
       const card=document.createElement("div"); card.className="trap-card"; card.style.opacity=".8";
       card.innerHTML=`<div class="trap-card-inner">
         <div class="trap-status-dot dot-done"></div>
         <div class="trap-card-info"><div class="trap-card-id">Trap ${c.trap_id}</div>
-          <div class="trap-card-meta">Catch logged${c._pending?" — sync pending":""}</div></div>
+          <div class="trap-card-meta">Check-in ${c.checkin_date||""} ${c.checkin_time||""}${c._pending?" — upload pending":""}</div></div>
         ${mpForTrap.length?`<div class="trap-badge-mudpuppy" onclick="event.stopPropagation();switchMode('mudpuppies');showScreen('screen-home');">${mpForTrap.length} mudpuppy${mpForTrap.length>1?"s":""}</div>`:""}
         <div class="trap-badge-done">Done</div>
       </div>`;
@@ -597,22 +604,24 @@ async function renderHome(){
   }
 }
 
-async function renderDeployDetail(trapId){
-  const deps=await mergedDeployments(),dep=deps.find(d=>d.trap_id===trapId);
+async function renderDeployDetail(deployRefId){
+  const deps=await mergedDeployments(),dep=deps.find(d=>d.ref_id===deployRefId)||deps.find(d=>d.trap_id===deployRefId);
   const el=$("ui-deploy-detail");
   if(!dep){ el.innerHTML="<p>Trap not found.</p>"; return; }
-  const em=elapsedMins(dep.deploy_time);
+  const checks=await mergedCheckins();
+  const checked=checks.some(c=>c.deployment_ref_id===dep.ref_id||(!c.deployment_ref_id&&c.trap_id===dep.trap_id&&c.checkin_date===dep.deploy_date));
+  const em=dep.deploy_date&&dep.deploy_date!==todayISO()?null:elapsedMins(dep.deploy_time);
   el.innerHTML=`
     <div class="hero deploy" style="margin-top:.2rem;">
       <div class="hero-eyebrow">Deployed</div>
       <div class="hero-title">Trap ${dep.trap_id}</div>
-      <div class="hero-sub">${dep.site||""} | awaiting check-in</div>
+      <div class="hero-sub">${dep.site||""} | ${dep.deploy_date||""} | ${checked?"check-in complete":"awaiting check-in"}</div>
     </div>
     <div class="field-block" style="margin-top:.85rem;">
       <div class="soak-card">
         <div class="soak-icon">SOAK</div>
-        <div class="soak-info"><div class="soak-lbl">Time in water</div><div class="soak-val">Set ${dep.deploy_time} → now</div></div>
-        <div class="soak-badge">${fmtSoak(em)}</div>
+        <div class="soak-info"><div class="soak-lbl">Time in water</div><div class="soak-val">${em===null?`Set ${dep.deploy_date||""} ${dep.deploy_time||""}`:`Set ${dep.deploy_time} → now`}</div></div>
+        <div class="soak-badge">${em===null?"—":fmtSoak(em)}</div>
       </div>
     </div>
     <div class="field-block">
@@ -625,16 +634,31 @@ async function renderDeployDetail(trapId){
         ${dep.notes?`<div class="success-row"><span>Notes</span><span class="success-row-val">${dep.notes}</span></div>`:""}
       </div>
     </div>
-    <div class="submit-wrap">
-      <button class="primary-btn btn-checkin" onclick="startCheckin('${dep.trap_id}')">Check in this trap</button>
-    </div>`;
+    ${checked?"":`<div class="submit-wrap"><button class="primary-btn btn-checkin" onclick="startCheckin('${dep.ref_id}')">Check in this trap</button></div>`}`;
 }
 
 window.startCheckin=async function(trapId){
-  state.checkinTrapId=trapId;
+  await refreshCheckinReceipt();
+  if(_checkinReceipt){
+    renderCheckinReceipt();
+    showScreen("screen-checkin-form");
+    if(!_checkinReceipt.uploaded) toast("Finish uploading the previous check-in before starting another.",5000);
+    return;
+  }
+  const pendingCheckins=await DB.getPendingCheckins();
+  if(pendingCheckins.length){
+    toast("Upload the previous trap check-in before starting another.",5000);
+    return;
+  }
+  const deps=await mergedDeployments();
+  const dep=deps.find(d=>d.ref_id===trapId)||deps.find(d=>d.trap_id===trapId);
+  if(!dep){ toast("Deployment record not found."); return; }
+  state.checkinTrapId=dep.trap_id;
+  state.checkinDeployRefId=dep.ref_id||"";
+  const submitBtn=$("submit-checkin-btn"); if(submitBtn) submitBtn.disabled=false;
+  $("ui-checkin-success").innerHTML="";
   currentSpecies=[]; addedSpeciesNames.clear(); swIdx=0;
   resetMudpuppyCheckinFields();
-  const deps=await mergedDeployments(),dep=deps.find(d=>d.trap_id===trapId);
   const site=dep?(dep.site||dep.watershed||""):"";
   const depTime=dep?dep.deploy_time:"--";
   $("ui-checkin-hero").innerHTML=`
@@ -666,7 +690,7 @@ async function submitDeploy(forceDuplicate){
   if(!lat||!lng) errs.push("GPS coordinates are required.");
   if(errs.length){ $("ui-deploy-error").innerHTML=`<div class="err-box"><div class="err-title">${errs.length} field${errs.length>1?"s":""} need attention:</div><ul class="err-list">${errs.map(e=>`<li>${e}</li>`).join("")}</ul></div>`; return; }
   if(!forceDuplicate){
-    const deps=await mergedDeployments(),existing=deps.find(d=>d.trap_id===trap);
+    const deps=await mergedDeployments(),existing=deps.find(d=>d.trap_id===trap&&d.deploy_date===todayISO());
     if(existing){ $("ui-deploy-error").innerHTML=`<div class="confirm-box"><p>Trap ${trap} already deployed today at ${existing.deploy_time}. Log a second deployment?</p><div class="confirm-btns"><button class="confirm-yes" onclick="submitDeploy(true)">Yes</button><button class="confirm-no" onclick="$('ui-deploy-error').innerHTML=''">Cancel</button></div></div>`; return; }
   }
   $("ui-deploy-error").innerHTML="";
@@ -704,79 +728,119 @@ function resetDeployForm(){
 // ============================================================
 // SUBMIT: CHECK-IN
 // ============================================================
+function renderCheckinReceipt(){
+  const r=_checkinReceipt,slot=$("ui-checkin-success");
+  if(!r||!slot) return;
+  const submitBtn=$("submit-checkin-btn"); if(submitBtn) submitBtn.disabled=true;
+  const uploadMessage=r.uploaded
+    ? `<div class="upload-confirmed" role="status">Record uploaded successfully. You can proceed to the next trap.</div>`
+    : `<div class="upload-pending" role="status">Record saved on this device but not uploaded. ${escapeHtml(r.message||"Waiting for a connection.")} Complete this upload before the next check-in.</div>`;
+  const nextAction=r.uploaded
+    ? `<button class="action-btn primary-checkin" onclick="proceedAfterCheckinReceipt()">Check next trap</button><button class="action-btn secondary" onclick="showScreen('screen-home');switchMode('checkin');">Back to overview</button>`
+    : `<button class="action-btn secondary" onclick="showScreen('screen-home');switchMode('checkin');">Back to overview</button>`;
+  slot.innerHTML=`
+    <div class="success-panel">
+      <div class="success-icon">${r.uploaded?"UPLOADED":"SAVED"}</div>
+      <div class="success-title checkin-color">Trap ${escapeHtml(r.trap)} checked in</div>
+      ${uploadMessage}
+      <div class="success-card">
+        <div class="success-row"><span>Soak time</span><span class="success-row-val">${fmtSoak(r.mins)}</span></div>
+        <div class="success-row"><span>Bycatch</span><span class="success-row-val">${r.speciesCount?r.speciesCount+" species | "+r.totalFish+" fish":"None"}</span></div>
+        ${r.flagN>0?`<div class="success-row"><span>Flagged</span><span class="success-row-val" style="color:var(--amber-lt);">${r.flagN} entr${r.flagN===1?"y":"ies"}</span></div>`:""}
+        ${r.mpSnap&&r.mpCount>0?`<div class="success-row"><span>Mudpuppies</span><span class="success-row-val" style="color:var(--clay-lt);">${r.mpCount} — add metadata in Mudpuppies tab</span></div>`:""}
+      </div>
+      ${nextAction}
+    </div>`;
+  slot.scrollIntoView({behavior:"smooth",block:"nearest"});
+}
+
+function saveCheckinReceipt(){
+  try{
+    if(_checkinReceipt) localStorage.setItem("fishtrap_checkin_receipt",JSON.stringify(_checkinReceipt));
+    else localStorage.removeItem("fishtrap_checkin_receipt");
+  }catch(e){}
+}
+
+function proceedAfterCheckinReceipt(){
+  if(!_checkinReceipt||!_checkinReceipt.uploaded){ toast("Wait for the record upload to finish before the next check-in.",5000); return; }
+  _checkinReceipt=null; saveCheckinReceipt();
+  $("ui-checkin-success").innerHTML="";
+  showScreen("screen-home"); switchMode("checkin");
+}
+window.proceedAfterCheckinReceipt=proceedAfterCheckinReceipt;
+
+async function refreshCheckinReceipt(){
+  if(!_checkinReceipt||_checkinReceipt.uploaded) return;
+  const pending=await DB.getPendingCheckins();
+  const item=pending.find(c=>c.ref_id===_checkinReceipt.ref);
+  if(!item){ _checkinReceipt.uploaded=true; _checkinReceipt.message=""; saveCheckinReceipt(); }
+  else if(item._syncError){ _checkinReceipt.message=item._syncError; saveCheckinReceipt(); }
+  renderCheckinReceipt();
+}
+
 async function submitCheckin(){
+  if(_checkinSubmitting) return;
   const trap=state.checkinTrapId;
   const errs=[];
   if(!trap) errs.push("No trap selected. Go back and tap a trap.");
   if(errs.length){ $("ui-checkin-error").innerHTML=`<div class="err-box"><div class="err-title">${errs.length} issue:</div><ul class="err-list">${errs.map(e=>`<li>${e}</li>`).join("")}</ul></div>`; return; }
   $("ui-checkin-error").innerHTML="";
-
-  const deps=await mergedDeployments(),dep=deps.find(d=>d.trap_id===trap);
-  const depTime=dep?dep.deploy_time:"";
-  const site=dep?(dep.site||dep.watershed||"Unknown"):"Unknown";
-  const checkinTime=nowTime(),mins=soakMins(depTime,checkinTime);
-  const totalFish=currentSpecies.reduce((a,c)=>a+(parseInt(c.count)||0),0);
-  const flagN=currentSpecies.filter(c=>c.flagged).length;
+  _checkinSubmitting=true;
+  const submitBtn=$("submit-checkin-btn"); if(submitBtn) submitBtn.disabled=true;
   const ref=newId("CHK");
+  try{
+    const deps=await mergedDeployments(),dep=deps.find(d=>d.ref_id===state.checkinDeployRefId)||deps.find(d=>d.trap_id===trap);
+    const depTime=dep?dep.deploy_time:"";
+    const site=dep?(dep.site||dep.watershed||"Unknown"):"Unknown";
+    const checkinTime=nowTime(),mins=soakMins(depTime,checkinTime);
+    const totalFish=currentSpecies.reduce((a,c)=>a+(parseInt(c.count)||0),0);
+    const flagN=currentSpecies.filter(c=>c.flagged).length;
+    const speciesPayload=currentSpecies.map((c,i)=>({
+      species:c.name,sci:c.sci,count:parseInt(c.count)||1,
+      length_cm:c.length_cm||"",weight_g:c.weight_g||"",flagged:c.flagged,
+      sample_id:`${ref}_${slug(c.name)}_${i}`,
+      photo_base64:c.photos.length>0?c.photos[0].base64:null,
+      photo_count:c.photos.length
+    }));
+    const rec={
+      ref_id:ref,deployment_ref_id:state.checkinDeployRefId,submitted_at:nowISO(),
+      checkin_date:todayISO(),checkin_time:checkinTime,trap_id:trap,site,
+      deploy_time:depTime,soak_mins:mins,gps_lat:state.checkinGpsLat,gps_lng:state.checkinGpsLng,
+      clarity:state.condClarity,weather:state.condWeather,water_temp_c:$("temp-input").value,
+      notes:$("checkin-notes").value.trim(),observer:$("observer-name").value.trim(),
+      mudpuppy_caught:mudpuppyCaught,mudpuppy_count:mudpuppyCaught?mudpuppyCount:0,species:speciesPayload
+    };
 
-  // One record per species card; each includes all photos for that species
-  const speciesPayload=currentSpecies.map((c,i)=>({
-    species:   c.name,
-    sci:       c.sci,
-    count:     parseInt(c.count)||1,
-    length_cm: c.length_cm||"",
-    weight_g:  c.weight_g||"",
-    flagged:   c.flagged,
-    sample_id: `${ref}_${slug(c.name)}_${i}`,
-    // Send only the first photo per species in the sync payload to avoid
-    // oversized payloads; additional photos are stored locally.
-    photo_base64: c.photos.length>0?c.photos[0].base64:null,
-    photo_count:  c.photos.length
-  }));
-
-  const rec={
-    ref_id:ref, submitted_at:nowISO(), checkin_date:todayISO(), checkin_time:checkinTime,
-    trap_id:trap, site, deploy_time:depTime, soak_mins:mins,
-    gps_lat:state.checkinGpsLat, gps_lng:state.checkinGpsLng,
-    clarity:state.condClarity, weather:state.condWeather,
-    water_temp_c:$("temp-input").value,
-    notes:$("checkin-notes").value.trim(),
-    observer:$("observer-name").value.trim(),
-    species: speciesPayload
-  };
-
-  await DB.addPendingCheckin(rec);
-  addToRecentSpecies(currentSpecies);
-
-  // Mudpuppy records
-  const mpSnap=mudpuppyCaught,mpCount=mudpuppyCount;
-  if(mudpuppyCaught&&mudpuppyCount>0){
-    for(let i=0;i<mudpuppyCount;i++){
-      await DB.addPendingMudpuppy({
+    await DB.addPendingCheckin(rec);
+    addToRecentSpecies(currentSpecies);
+    const mpSnap=mudpuppyCaught,mpCount=mudpuppyCount;
+    if(mudpuppyCaught&&mudpuppyCount>0){
+      for(let i=0;i<mudpuppyCount;i++) await DB.addPendingMudpuppy({
         id:newId("MP"),trap_id:trap,checkin_ref_id:ref,site,
         catch_date:todayISO(),individual_index:i+1,total_in_catch:mudpuppyCount,
-        photo_base64:null,sex:"",weight_g:"",svl_mm:"",
-        swab_vial_id:"",pit_tag_id:"",tissue_vial_id:"",
+        photo_base64:null,sex:"",weight_g:"",svl_mm:"",swab_vial_id:"",pit_tag_id:"",tissue_vial_id:"",
         notes:"",submitted_at:nowISO(),updated_at:nowISO()
       });
     }
+    _checkinReceipt={ref,trap,mins,totalFish,speciesCount:speciesPayload.length,flagN,mpSnap,mpCount,uploaded:false,message:navigator.onLine?"Uploading record…":"Waiting for a connection."};
+    saveCheckinReceipt();
+    resetCheckinForm(); buzz(40); renderCheckinReceipt(); await renderHome();
+    const syncResult=await trySyncAll();
+    const outcome=syncResult.outcomes&&syncResult.outcomes["checkin:"+ref];
+    if(outcome&&outcome.ok){ _checkinReceipt.uploaded=true; _checkinReceipt.message=""; saveCheckinReceipt(); }
+    else{
+      const pending=await DB.getPendingCheckins(),local=pending.find(c=>c.ref_id===ref);
+      _checkinReceipt.message=(outcome&&outcome.message)||(local&&local._syncError)||(navigator.onLine?"Upload is pending.":"Waiting for a connection.");
+      saveCheckinReceipt();
+    }
+    renderCheckinReceipt(); await renderHome();
+  }catch(e){
+    console.error("Check-in save/upload failed:",e);
+    if(_checkinReceipt&&_checkinReceipt.ref===ref){ _checkinReceipt.message=e.message||"Upload is pending."; renderCheckinReceipt(); }
+    else $("ui-checkin-error").innerHTML=`<div class="err-box">Could not save this check-in: ${escapeHtml(e.message||"Unknown error.")}</div>`;
+  }finally{
+    _checkinSubmitting=false; if(submitBtn) submitBtn.disabled=!!(_checkinReceipt&&_checkinReceipt.ref===ref);
   }
-
-  resetCheckinForm(); buzz(40); trySyncAll(); renderHome();
-  $("ui-checkin-success").innerHTML=`
-    <div class="success-panel">
-      <div class="success-icon">LOGGED</div>
-      <div class="success-title checkin-color">Trap ${trap} checked in</div>
-      <div class="success-sub">Saved on device${navigator.onLine?" and syncing now.":" — syncs when online."}</div>
-      <div class="success-card">
-        <div class="success-row"><span>Soak time</span><span class="success-row-val">${fmtSoak(mins)}</span></div>
-        <div class="success-row"><span>Bycatch</span><span class="success-row-val">${currentSpecies.length?currentSpecies.length+" species | "+totalFish+" fish":"None"}</span></div>
-        ${flagN>0?`<div class="success-row"><span>Flagged</span><span class="success-row-val" style="color:var(--amber-lt);">${flagN} entr${flagN===1?"y":"ies"}</span></div>`:""}
-        ${mpSnap&&mpCount>0?`<div class="success-row"><span>Mudpuppies</span><span class="success-row-val" style="color:var(--clay-lt);">${mpCount} — add metadata in Mudpuppies tab</span></div>`:""}
-      </div>
-      <button class="action-btn primary-checkin" onclick="$('ui-checkin-success').innerHTML='';showScreen('screen-home');">Check next trap</button>
-      <button class="action-btn secondary" onclick="$('ui-checkin-success').innerHTML='';showScreen('screen-home');switchMode('checkin');">Back to overview</button>
-    </div>`;
 }
 window.submitCheckin=submitCheckin;
 
@@ -793,7 +857,7 @@ function resetCheckinForm(){
 function showClearConfirm(){
   $("ui-clear-confirm").innerHTML=`
     <div class="confirm-box">
-      <p>Archives all current deployments and catches to a history tab, then clears both lists for a fresh survey week. Requires internet.</p>
+      <p>Archives all current deployments, check-ins, and catches to history tabs, then clears this survey. Requires internet and all pending records to be uploaded first.</p>
       <div class="confirm-btns">
         <button class="confirm-yes" onclick="confirmClear()">Yes, clear and start fresh</button>
         <button class="confirm-no" onclick="$('ui-clear-confirm').innerHTML=''">Cancel</button>
@@ -805,8 +869,11 @@ async function confirmClear(){
   $("ui-clear-confirm").innerHTML="";
   if(!navigator.onLine){ toast("You're offline — connect to clear/archive."); return; }
   try{
+    await trySyncAll();
+    const pendingLists=await Promise.all([DB.getPendingDeployments(),DB.getPendingCheckins(),DB.getPendingMudpuppies()]);
+    if(pendingLists.some(list=>list.length)){ toast("Some records are still waiting to upload. Clear the survey after they sync.",5000); return; }
     const resp=await callServer("clear",{});
-    if(resp&&resp.ok){ toast("Traps cleared and archived. Ready for new survey week."); await refreshFromServer(); renderHome(); }
+    if(resp&&resp.ok){ _checkinReceipt=null; saveCheckinReceipt(); toast("Traps cleared and archived. Ready for a new survey."); await refreshFromServer(); renderHome(); }
     else toast("Error: "+(resp&&resp.message?resp.message:"unknown"));
   }catch(e){ toast("Error: "+e.message); }
 }
@@ -837,8 +904,8 @@ async function refreshFromServer(){
   try{
     const data=await fetchServerJson(getAppsScriptUrl()+"?action=today");
     if(data&&data.ok){ serverToday={deployments:data.deployments||[],checkins:data.checkins||[]}; await DB.cacheServer(serverToday); return {ok:true}; }
-    return {ok:false,message:(data&&data.message)||"Apps Script did not return today's survey data."};
-  }catch(e){ return {ok:false,message:e.message||"Could not load today's survey data."}; }
+    return {ok:false,message:(data&&data.message)||"Apps Script did not return the survey history."};
+  }catch(e){ return {ok:false,message:e.message||"Could not load the survey history."}; }
 }
 async function refreshMudpuppiesFromServer(){
   try{
@@ -852,45 +919,60 @@ function updateSyncModeLabel(){
   const el=$("sync-mode-indicator"); if(!el) return;
   const syncing=!!_syncInFlight, online=navigator.onLine;
   el.textContent=!online?"Auto-sync paused":(syncing?"Syncing…":(_lastSyncError?"Sync issue":"Auto-sync on"));
-  el.title=_lastSyncError||"Syncs automatically while the app is open.";
+  el.title=_lastSyncError||"Uploads once after saving. Reconnect, reopen the app, or save another record to retry a failed upload.";
   el.classList.toggle("is-syncing",online&&syncing);
   el.classList.toggle("is-paused",!online);
   el.classList.toggle("has-error",online&&!syncing&&!!_lastSyncError);
 }
 
 async function trySyncAll(){
-  if(_syncInFlight) return _syncInFlight;
-  _syncInFlight=runSyncCycle();
+  if(_syncInFlight){ _syncAgain=true; return _syncInFlight; }
+  const attempted=new Set(),outcomes={};
+  _syncInFlight=(async()=>{
+    let result={ok:false,message:"No sync pass completed.",outcomes:{}};
+    do{
+      _syncAgain=false;
+      result=await runSyncCycle(attempted);
+      Object.assign(outcomes,result.outcomes||{});
+    }while(_syncAgain&&navigator.onLine&&!result.networkDown);
+    return {...result,outcomes};
+  })();
   updateSyncModeLabel();
   try{ return await _syncInFlight; }
   finally{
     _syncInFlight=null; updateSyncModeLabel();
+    try{ await refreshCheckinReceipt(); }catch(e){}
     try{ await renderSyncIssues(); }catch(e){}
   }
 }
 
-async function runSyncCycle(){
-  if(!navigator.onLine){ _lastSyncError=""; await updateStatusBar(); return {ok:false,message:"You are offline. Saved records will sync when you reconnect."}; }
+async function runSyncCycle(attempted){
+  const outcomes={};
+  if(!navigator.onLine){ _lastSyncError=""; await updateStatusBar(); return {ok:false,message:"You are offline. Saved records will sync when you reconnect.",outcomes,networkDown:false}; }
   let networkDown=false, syncError="", rejected=0, refreshError="";
   async function syncStore(getAll,addBack,remove,action,idKey){
     if(networkDown) return;
     const items=await getAll();
     for(const item of items){
       if(networkDown) break;
-      if(item._syncError&&item._lastAttempt&&(Date.now()-new Date(item._lastAttempt).getTime())<30000) continue;
+      const outcomeKey=action+":"+item[idKey];
+      if(attempted.has(outcomeKey)) continue;
+      attempted.add(outcomeKey);
       try{
         const resp=await callServer(action,item);
-        if(resp&&resp.ok){ await remove(item[idKey]); }
+        if(resp&&resp.ok){ await remove(item[idKey]); outcomes[outcomeKey]={ok:true}; }
         else{
           const message=(resp&&resp.message)||"Server rejected record.";
           rejected++; if(!syncError) syncError=message;
           await addBack({...item,_syncError:message,_lastAttempt:nowISO()});
+          outcomes[outcomeKey]={ok:false,message};
         }
       }catch(e){
         networkDown=true;
         const message=e.message||"Could not reach Apps Script.";
         if(!syncError) syncError=message;
         await addBack({...item,_syncError:message,_lastAttempt:nowISO()});
+        outcomes[outcomeKey]={ok:false,message};
       }
     }
   }
@@ -918,7 +1000,7 @@ async function runSyncCycle(){
   }
   _lastSyncError=ok?"":message;
   if(ok){ try{ localStorage.setItem("fishtrap_last_sync",Date.now().toString()); }catch(e){} }
-  return {ok,message,pending:pendingCount};
+  return {ok,message,pending:pendingCount,outcomes,networkDown};
 }
 
 function timeAgo(ms){
@@ -937,13 +1019,13 @@ async function renderSyncIssues(){
   ];
   const slot=$("sync-issues-slot");
   if(!issues.length){
-    slot.innerHTML=_lastSyncError?`<div class="sync-issues-banner"><div class="sync-issues-head"><span>Server sync issue</span></div><div class="sync-issue-item"><div class="msg">${escapeHtml(_lastSyncError)}</div><div class="sync-issue-auto">The app will retry automatically.</div></div></div>`:"";
+    slot.innerHTML=_lastSyncError?`<div class="sync-issues-banner"><div class="sync-issues-head"><span>Server sync issue</span></div><div class="sync-issue-item"><div class="msg">${escapeHtml(_lastSyncError)}</div><div class="sync-issue-auto">Retry after reconnecting, reopening the app, or saving another record.</div></div></div>`:"";
     return;
   }
   slot.innerHTML=`<div class="sync-issues-banner">
     <div class="sync-issues-head"><span>${issues.length} record${issues.length>1?"s":""} need attention</span></div>
     ${issues.map(iss=>`<div class="sync-issue-item">${escapeHtml(iss.type)} — ${escapeHtml(iss.label)}<div class="msg">${escapeHtml(iss.msg)}</div>
-      <div class="sync-issue-auto">The app will retry automatically.</div></div>`).join("")}
+      <div class="sync-issue-auto">Retry after reconnecting, reopening the app, or saving another record.</div></div>`).join("")}
   </div>`;
 }
 
@@ -967,9 +1049,6 @@ if("serviceWorker" in navigator){
 }
 window.addEventListener("online",()=>trySyncAll());
 window.addEventListener("offline",()=>{ updateStatusBar(); updateSyncModeLabel(); });
-window.addEventListener("pageshow",()=>{ if(navigator.onLine) trySyncAll(); });
-window.addEventListener("focus",()=>{ if(navigator.onLine) trySyncAll(); });
-document.addEventListener("visibilitychange",()=>{ if(!document.hidden&&navigator.onLine) trySyncAll(); });
 
 // ── ALL EVENT LISTENERS — inside DOMContentLoaded ──────────
 document.addEventListener("DOMContentLoaded", ()=>{
@@ -1022,12 +1101,15 @@ document.addEventListener("DOMContentLoaded", ()=>{
 
     const cached=await DB.getServerCache();
     if(cached) serverToday=cached;
+    try{
+      const savedReceipt=localStorage.getItem("fishtrap_checkin_receipt");
+      if(savedReceipt) _checkinReceipt=JSON.parse(savedReceipt);
+    }catch(e){ _checkinReceipt=null; }
 
     await updateStatusBar();
     await renderHome();
 
     updateSyncModeLabel();
     if(navigator.onLine) await trySyncAll();
-    setInterval(()=>{ if(navigator.onLine) trySyncAll(); }, CFG.POLL_INTERVAL_MS||20000);
   })();
 });

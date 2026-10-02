@@ -52,7 +52,7 @@
         <div class="hero-sub">Record location and time at deployment</div>
       </div>
       <div style="padding:0 1rem;">
-        <span class="trap-list-lbl">Deployed today</span>
+        <span class="trap-list-lbl">Trap history — until cleared</span>
         <div id="ui-deploy-list"></div>
         <button class="add-trap-btn" onclick="showScreen('screen-deploy-form')">+ Deploy new trap</button>
         <button class="clear-survey-btn" onclick="showClearConfirm()">Clear all traps / new survey week</button>
@@ -240,7 +240,7 @@
     </div>
     <div id="ui-checkin-error"></div>
     <div class="submit-wrap">
-      <button class="primary-btn btn-checkin" onclick="submitCheckin()">Submit Check-in</button>
+      <button class="primary-btn btn-checkin" id="submit-checkin-btn" onclick="submitCheckin()">Submit Check-in</button>
     </div>
     <div id="ui-checkin-success"></div>
   </div>
