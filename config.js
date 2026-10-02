@@ -4,7 +4,7 @@
 window.APP_CONFIG = {
   // Paste the Web App URL you get after deploying Code.gs
   // It looks like: https://script.google.com/macros/s/AKfycb.../exec
-  APPS_SCRIPT_URL: "AKfycbyokFBvSky-m_nq4FozwHtFwh1Eq4TMvKcmhr75HbJWEXE7slKmSjUMd-CdnLYnPD76MQ",
+  APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbyokFBvSky-m_nq4FozwHtFwh1Eq4TMvKcmhr75HbJWEXE7slKmSjUMd-CdnLYnPD76MQ/exec",
 
   // How often (ms) to poll the server for other devices' updates while online
   POLL_INTERVAL_MS: 20000
