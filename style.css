@@ -130,13 +130,14 @@ button:focus-visible, .trap-card:focus-visible, .select-trigger:focus-visible, .
 .status-text    { color: var(--ink2); flex: 1; font-weight: 500; }
 .status-bar.is-offline .status-text { color: var(--clay-lt); font-weight: 700; }
 .status-pending { color: var(--amber-lt); font-weight: 700; }
-.sync-now-btn {
-  flex-shrink: 0; background: var(--bg3); border: 1px solid var(--rule);
-  border-radius: 20px; color: var(--ink2); font-family: var(--mono);
-  font-size: .6rem; font-weight: 600; padding: .28rem .6rem; cursor: pointer;
-  letter-spacing: .04em;
+.sync-mode-indicator {
+  flex-shrink: 0; border: 1px solid var(--rule); border-radius: 20px;
+  color: var(--moss-lt); font-family: var(--mono); font-size: .57rem;
+  font-weight: 600; padding: .28rem .55rem; letter-spacing: .02em;
 }
-.sync-now-btn.syncing { opacity: .55; pointer-events: none; }
+.sync-mode-indicator.is-syncing { color: var(--amber-lt); }
+.sync-mode-indicator.is-paused { color: var(--clay-lt); }
+.sync-mode-indicator.has-error { color: var(--clay-lt); border-color: rgba(168,72,48,.45); }
 #last-synced-row { padding: 0 1rem .28rem; font-family: var(--mono);
   font-size: .58rem; color: var(--ink4); letter-spacing: .04em; background: var(--bg2); }
 .sync-issues-banner { margin: 0 1rem .6rem; background: var(--clay-bg);
@@ -147,9 +148,7 @@ button:focus-visible, .trap-card:focus-visible, .select-trigger:focus-visible, .
   font-size: .7rem; color: var(--ink2); }
 .sync-issue-item .msg { color: var(--clay-lt); margin-top: .12rem;
   font-family: var(--mono); font-size: .63rem; }
-.sync-issue-retry { margin-top: .35rem; height: 28px; padding: 0 .6rem; border-radius: 6px;
-  background: var(--clay-bg); border: 1px solid rgba(168,72,48,.35);
-  color: var(--clay-lt); font-size: .65rem; font-weight: 700; cursor: pointer; }
+.sync-issue-auto { color: var(--ink4); margin-top: .25rem; font-size: .62rem; }
 
 /* ── MODE BAR ── */
 .mode-bar { margin: .3rem 1rem .6rem; background: var(--bg3);

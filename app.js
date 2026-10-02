@@ -20,6 +20,8 @@ let searchQ = "";
 let _photoTargetId = null;    // species card id waiting for a photo
 
 let serverToday = { deployments: [], checkins: [] };
+let _syncInFlight = null;
+let _lastSyncError = "";
 
 // ── helpers ────────────────────────────────────────────────
 function pad(n){ return String(n).padStart(2,"0"); }
@@ -30,6 +32,7 @@ function newId(p){ return p+"-"+Date.now()+"-"+Math.random().toString(36).slice(
 function $(id){ return document.getElementById(id); }
 function slug(s){ return String(s).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/(^-|-$)/g,""); }
 function escapeAttr(s){ return String(s).replace(/'/g,"\\'"); }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
 function toast(msg,ms=3200){
   const el=document.createElement("div"); el.className="toast"; el.textContent=msg;
   $("toast-slot").appendChild(el); setTimeout(()=>el.remove(),ms);
@@ -845,16 +848,36 @@ async function refreshMudpuppiesFromServer(){
   }catch(e){ return {ok:false,message:e.message||"Could not load mudpuppy records."}; }
 }
 
-async function trySyncAll(options={}){
-  const force=options.force===true;
-  if(!navigator.onLine){ await updateStatusBar(); return {ok:false,message:"You are offline. Saved records will sync when you reconnect."}; }
+function updateSyncModeLabel(){
+  const el=$("sync-mode-indicator"); if(!el) return;
+  const syncing=!!_syncInFlight, online=navigator.onLine;
+  el.textContent=!online?"Auto-sync paused":(syncing?"Syncing…":(_lastSyncError?"Sync issue":"Auto-sync on"));
+  el.title=_lastSyncError||"Syncs automatically while the app is open.";
+  el.classList.toggle("is-syncing",online&&syncing);
+  el.classList.toggle("is-paused",!online);
+  el.classList.toggle("has-error",online&&!syncing&&!!_lastSyncError);
+}
+
+async function trySyncAll(){
+  if(_syncInFlight) return _syncInFlight;
+  _syncInFlight=runSyncCycle();
+  updateSyncModeLabel();
+  try{ return await _syncInFlight; }
+  finally{
+    _syncInFlight=null; updateSyncModeLabel();
+    try{ await renderSyncIssues(); }catch(e){}
+  }
+}
+
+async function runSyncCycle(){
+  if(!navigator.onLine){ _lastSyncError=""; await updateStatusBar(); return {ok:false,message:"You are offline. Saved records will sync when you reconnect."}; }
   let networkDown=false, syncError="", rejected=0, refreshError="";
   async function syncStore(getAll,addBack,remove,action,idKey){
     if(networkDown) return;
     const items=await getAll();
     for(const item of items){
       if(networkDown) break;
-      if(!force&&item._syncError&&item._lastAttempt&&(Date.now()-new Date(item._lastAttempt).getTime())<30000) continue;
+      if(item._syncError&&item._lastAttempt&&(Date.now()-new Date(item._lastAttempt).getTime())<30000) continue;
       try{
         const resp=await callServer(action,item);
         if(resp&&resp.ok){ await remove(item[idKey]); }
@@ -885,7 +908,6 @@ async function trySyncAll(options={}){
   const pendingLists=await Promise.all([DB.getPendingDeployments(),DB.getPendingCheckins(),DB.getPendingMudpuppies()]);
   const pendingCount=pendingLists.reduce((sum,list)=>sum+list.length,0);
   const ok=!networkDown&&rejected===0&&!refreshError&&pendingCount===0;
-  if(ok){ try{ localStorage.setItem("fishtrap_last_sync",Date.now().toString()); }catch(e){} }
   let message="";
   if(networkDown) message=syncError||"Could not reach Apps Script.";
   else if(rejected) message=syncError||`${rejected} record(s) were rejected by Apps Script.`;
@@ -894,24 +916,10 @@ async function trySyncAll(options={}){
     const firstIssue=pendingLists.flat().find(item=>item._syncError);
     message=(firstIssue&&firstIssue._syncError)||`${pendingCount} record(s) are still pending.`;
   }
+  _lastSyncError=ok?"":message;
+  if(ok){ try{ localStorage.setItem("fishtrap_last_sync",Date.now().toString()); }catch(e){} }
   return {ok,message,pending:pendingCount};
 }
-
-async function manualSync(){
-  const btn=$("sync-now-btn"); if(!btn||btn.classList.contains("syncing")) return;
-  btn.classList.add("syncing"); btn.textContent="Syncing...";
-  try{
-    const result=await trySyncAll({force:true});
-    if(!result.ok) throw new Error(result.message||`${result.pending||"Some"} record(s) are still pending.`);
-    toast("Sync complete.");
-  }catch(e){
-    console.error("Manual sync failed:",e);
-    toast("Sync failed: "+(e.message||"Unknown error."),6000);
-  }finally{
-    btn.classList.remove("syncing"); btn.textContent="Sync now";
-  }
-}
-window.manualSync=manualSync;
 
 function timeAgo(ms){
   const diff=Math.max(0,Date.now()-ms),mins=Math.floor(diff/60000);
@@ -928,29 +936,16 @@ async function renderSyncIssues(){
     ...mps.filter(m=>m._syncError).map(m=>({type:"Mudpuppy",label:`Trap ${m.trap_id} #${m.individual_index}`,msg:m._syncError,action:"mudpuppySave",item:m}))
   ];
   const slot=$("sync-issues-slot");
-  if(!issues.length){ slot.innerHTML=""; return; }
-  window._syncIssuesList=issues;
+  if(!issues.length){
+    slot.innerHTML=_lastSyncError?`<div class="sync-issues-banner"><div class="sync-issues-head"><span>Server sync issue</span></div><div class="sync-issue-item"><div class="msg">${escapeHtml(_lastSyncError)}</div><div class="sync-issue-auto">The app will retry automatically.</div></div></div>`:"";
+    return;
+  }
   slot.innerHTML=`<div class="sync-issues-banner">
     <div class="sync-issues-head"><span>${issues.length} record${issues.length>1?"s":""} need attention</span></div>
-    ${issues.map((iss,idx)=>`<div class="sync-issue-item">${iss.type} — ${iss.label}<div class="msg">${iss.msg}</div>
-      <button class="sync-issue-retry" onclick="retrySyncIssue(${idx})">Retry</button></div>`).join("")}
+    ${issues.map(iss=>`<div class="sync-issue-item">${escapeHtml(iss.type)} — ${escapeHtml(iss.label)}<div class="msg">${escapeHtml(iss.msg)}</div>
+      <div class="sync-issue-auto">The app will retry automatically.</div></div>`).join("")}
   </div>`;
 }
-
-async function retrySyncIssue(idx){
-  const iss=(window._syncIssuesList||[])[idx]; if(!iss) return;
-  try{
-    const resp=await callServer(iss.action,iss.item);
-    if(resp&&resp.ok){
-      if(iss.action==="deploy")          await DB.removePendingDeployment(iss.item.ref_id);
-      else if(iss.action==="checkin")    await DB.removePendingCheckin(iss.item.ref_id);
-      else if(iss.action==="mudpuppySave") await DB.removePendingMudpuppy(iss.item.id);
-      toast("Synced.");
-    } else toast("Still failing: "+((resp&&resp.message)||"unknown"));
-  }catch(e){ toast("Still offline."); }
-  await updateStatusBar(); await renderHome();
-}
-window.retrySyncIssue=retrySyncIssue;
 
 async function updateStatusBar(){
   const online=navigator.onLine;
@@ -960,6 +955,7 @@ async function updateStatusBar(){
   const n=deps.length+checks.length+mps.length;
   $("status-pending").textContent=n?`${n} pending sync`:"";
   $("status-bar").className="status-bar "+(online?"is-online":"is-offline")+(n&&online?" has-pending":"");
+  updateSyncModeLabel();
   let lastSync=null; try{ lastSync=localStorage.getItem("fishtrap_last_sync"); }catch(e){}
   $("last-synced-row").innerHTML=lastSync?`Last synced ${timeAgo(parseInt(lastSync))}`:(online?"":"Not yet synced this session");
   await renderSyncIssues();
@@ -970,7 +966,10 @@ if("serviceWorker" in navigator){
   window.addEventListener("load",()=>{ navigator.serviceWorker.register("sw.js").catch(()=>{}); });
 }
 window.addEventListener("online",()=>trySyncAll());
-window.addEventListener("offline",()=>updateStatusBar());
+window.addEventListener("offline",()=>{ updateStatusBar(); updateSyncModeLabel(); });
+window.addEventListener("pageshow",()=>{ if(navigator.onLine) trySyncAll(); });
+window.addEventListener("focus",()=>{ if(navigator.onLine) trySyncAll(); });
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden&&navigator.onLine) trySyncAll(); });
 
 // ── ALL EVENT LISTENERS — inside DOMContentLoaded ──────────
 document.addEventListener("DOMContentLoaded", ()=>{
@@ -1027,11 +1026,8 @@ document.addEventListener("DOMContentLoaded", ()=>{
     await updateStatusBar();
     await renderHome();
 
-    if(navigator.onLine){
-      await refreshFromServer();
-      await refreshMudpuppiesFromServer();
-      await trySyncAll();
-    }
+    updateSyncModeLabel();
+    if(navigator.onLine) await trySyncAll();
     setInterval(()=>{ if(navigator.onLine) trySyncAll(); }, CFG.POLL_INTERVAL_MS||20000);
   })();
 });
