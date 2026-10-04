@@ -1,13 +1,12 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="night">
+<html lang="en" data-theme="day">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Fish Trap Survey</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#13110e">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<meta name="theme-color" content="#f3f6f5">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,12 +14,15 @@
 
   <!-- THEME TOGGLE -->
   <div class="theme-bar">
+    <span class="app-brand">NM Survey<span class="brand-caption">Field research</span></span>
     <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">
-      <span id="theme-icon">☀</span>
-      <span id="theme-label">Day mode</span>
+      <span id="theme-icon">☽</span>
+      <span id="theme-label">Night mode</span>
     </button>
   </div>
 
+  <div id="dataset-banner" class="dataset-banner"></div>
+  <details class="daily-summary"><summary>Today’s progress</summary><div id="daily-dashboard" class="daily-dashboard"></div></details>
   <!-- STATUS BAR -->
   <div class="status-bar" id="status-bar">
     <span class="status-dot offline" id="status-dot"></span>
@@ -48,22 +50,33 @@
     <div id="view-deploy">
       <div class="hero deploy">
         <div class="hero-eyebrow">Trap Deployment</div>
-        <div class="hero-title">Deploy Trap</div>
-        <div class="hero-sub">Record location and time at deployment</div>
+        <div class="hero-title">Your traps</div>
+        <div class="hero-sub">Deploy once. Keep checking each day.</div>
       </div>
       <div style="padding:0 1rem;">
-        <span class="trap-list-lbl">Trap history — until cleared</span>
+        <span class="trap-list-lbl">Active deployments</span>
         <div id="ui-deploy-list"></div>
-        <button class="add-trap-btn" onclick="showScreen('screen-deploy-form')">+ Deploy new trap</button>
-        <button class="clear-survey-btn" onclick="showClearConfirm()">Clear all traps / new survey week</button>
+        <button class="add-trap-btn" onclick="openDeployForm()">+ Deploy new trap</button>
+        <details class="data-tools app-settings"><summary>Settings</summary>
+        <button id="dataset-switch" class="action-btn secondary" onclick="switchDataset()">Switch dataset</button>
+        <details class="data-tools"><summary>Project details</summary>
+        <label>Project title<input id="project-title" class="text-input"></label>
+        <label>University / institution<input id="project-institution" class="text-input"></label>
+        <label>Research team<input id="project-team" class="text-input"></label>
+        <label>Protocol version<input id="project-protocol" class="text-input"></label>
+        <button id="project-save" class="action-btn secondary">Save project details</button></details>
+        <details class="data-tools"><summary>Clear or delete data</summary>
+        <button class="clear-survey-btn" onclick="showClearConfirm()">Archive current survey</button>
         <div id="ui-clear-confirm"></div>
+        <button type="button" class="delete-record-btn" onclick="deleteAllSurveyData()">Delete all data in this dataset</button></details>
+        </details>
       </div>
     </div>
 
     <div id="view-checkin" style="display:none;">
       <div class="hero checkin">
         <div class="hero-eyebrow">Trap Check-in</div>
-        <div class="hero-title">Process Catch</div>
+        <div class="hero-title">Log a catch</div>
         <div class="hero-sub">Select a deployed trap to record catch data</div>
       </div>
       <div style="padding:0 1rem;">
@@ -76,7 +89,7 @@
     <div id="view-mudpuppies" style="display:none;">
       <div class="hero mudpuppy">
         <div class="hero-eyebrow">Mudpuppy Records</div>
-        <div class="hero-title">Individual Metadata</div>
+        <div class="hero-title">Mudpuppy records</div>
         <div class="hero-sub">Select an individual to record morphometric and sample data</div>
       </div>
       <div style="padding:0 1rem;">
@@ -89,9 +102,9 @@
   <div id="screen-deploy-form" class="screen">
     <button class="back-btn deploy" onclick="showScreen('screen-home')">&lt; Back</button>
     <div class="hero deploy" style="margin-top:.2rem;">
-      <div class="hero-eyebrow">Deploy Trap</div>
+      <div class="hero-eyebrow">Your traps</div>
       <div class="hero-title">Trap Location</div>
-      <div class="hero-sub">Trap number, GPS, and time are required</div>
+      <div class="hero-sub">Trap number, GPS, date, and time are required</div>
     </div>
     <div class="field-block" style="margin-top:.85rem;">
       <span class="sec-label">Trap Number *</span>
@@ -107,8 +120,8 @@
       <div class="ws-chips" id="deploy-site-chips"></div>
     </div>
     <div class="two-col">
-      <div class="dt-cell"><div class="dt-cell-lbl">Deploy date</div><div class="dt-cell-val" id="d-deploy-date">--</div></div>
-      <div class="dt-cell"><div class="dt-cell-lbl">Deploy time</div><div class="dt-cell-val" id="d-deploy-time">--:--</div></div>
+      <div class="dt-cell"><label class="dt-cell-lbl" for="deploy-date-input">Deploy date</label><input class="dt-input" id="deploy-date-input" type="date" required></div>
+      <div class="dt-cell"><label class="dt-cell-lbl" for="deploy-time-input">Deploy time</label><input class="dt-input" id="deploy-time-input" type="time" step="60" required></div>
     </div>
     <div class="field-block">
       <span class="sec-label">GPS Coordinates *</span>
@@ -144,7 +157,7 @@
     <div id="ui-checkin-hero"></div>
 
     <div class="field-block" style="margin-top:.85rem;">
-      <span class="sec-label">Soak Time</span>
+      <span class="sec-label">1. Trap &amp; timing</span>
       <div class="soak-card">
         <div class="soak-icon">SOAK</div>
         <div class="soak-info">
@@ -155,45 +168,39 @@
       </div>
     </div>
     <div class="two-col">
-      <div class="dt-cell"><div class="dt-cell-lbl">Check-in date</div><div class="dt-cell-val" id="d-checkin-date">--</div></div>
-      <div class="dt-cell"><div class="dt-cell-lbl">Check-in time</div><div class="dt-cell-val" id="d-checkin-time">--:--</div></div>
+      <div class="dt-cell"><label class="dt-cell-lbl" for="checkin-date-input">Check-in date</label><input class="dt-input" id="checkin-date-input" type="date" required></div>
+      <div class="dt-cell"><label class="dt-cell-lbl" for="checkin-time-input">Check-in time</label><input class="dt-input" id="checkin-time-input" type="time" step="60" required></div>
     </div>
     <div class="divider"></div>
 
-    <!-- Water conditions -->
-    <div class="field-block">
-      <span class="sec-label">Water Conditions</span>
-      <div class="cond-grid">
-        <div>
-          <span class="cond-sub-lbl">Clarity</span>
-          <div class="cond-tap-row">
-            <div class="cond-tap active" data-val="clear"  onclick="pickCond(this,'clarity')">Clear</div>
-            <div class="cond-tap"        data-val="turbid" onclick="pickCond(this,'clarity')">Turbid</div>
-            <div class="cond-tap"        data-val="murky"  onclick="pickCond(this,'clarity')">Murky</div>
-          </div>
-        </div>
-        <div>
-          <span class="cond-sub-lbl">Weather</span>
-          <div class="cond-tap-row">
-            <div class="cond-tap active" data-val="sunny"    onclick="pickCond(this,'weather')">Sunny</div>
-            <div class="cond-tap"        data-val="overcast" onclick="pickCond(this,'weather')">Overcast</div>
-            <div class="cond-tap"        data-val="rain"     onclick="pickCond(this,'weather')">Rain</div>
-          </div>
-        </div>
+    <section class="field-block">
+      <h2 class="sec-label">Weather</h2>
+      <div class="cond-tap-row">
+        <button type="button" class="cond-tap active" data-val="sunny" onclick="pickCond(this,'weather')">Sunny</button>
+        <button type="button" class="cond-tap" data-val="overcast" onclick="pickCond(this,'weather')">Overcast</button>
+        <button type="button" class="cond-tap" data-val="rain" onclick="pickCond(this,'weather')">Rain</button>
       </div>
-      <div class="temp-row">
-        <div class="temp-wrap">
-          <input type="number" inputmode="decimal" class="temp-input" id="temp-input" value="14">
-          <span class="temp-unit">°C</span>
-        </div>
-        <span class="temp-lbl">water temperature</span>
+    </section>
+    <section class="field-block">
+      <h2 class="sec-label">2. Site measurements</h2>
+      <p class="section-help">Enter measured values. Leave blank if not measured.</p>
+      <div class="measurement-field">
+        <label for="air-temp-input">Air temperature at site (°C)</label>
+        <input type="number" step="any" class="text-input" id="air-temp-input" placeholder="e.g. 18.5">
       </div>
-    </div>
-    <div class="divider"></div>
+      <div class="measurement-field">
+        <label for="temp-input">Water temperature (°C)</label>
+        <input type="number" step="any" class="text-input" id="temp-input" placeholder="e.g. 14.2">
+      </div>
+      <div class="measurement-field">
+        <label for="water-ph-input">Water pH (0–14)</label>
+        <input type="number" inputmode="decimal" step="any" min="0" max="14" class="text-input" id="water-ph-input" placeholder="e.g. 7.2">
+      </div>
+    </section>
 
     <!-- Mudpuppy -->
     <div class="field-block">
-      <span class="sec-label">Mudpuppy Captured?</span>
+      <span class="sec-label">3. Mudpuppy catch</span>
       <div class="cond-tap-row">
         <div class="cond-tap active" id="mp-tap-no"  onclick="setMudpuppyCaught(false)">No</div>
         <div class="cond-tap"        id="mp-tap-yes" onclick="setMudpuppyCaught(true)">Yes</div>
@@ -205,19 +212,19 @@
           <span class="ctr-val" id="mp-count-val">1</span>
           <button class="ctr-btn" onclick="changeMudpuppyCount(1)">+</button>
         </div>
-        <p style="font-size:.68rem;color:var(--ink4);margin-top:.45rem;line-height:1.5;">
+        <p style="font-size:1rem;color:var(--ink4);margin-top:.45rem;line-height:1.5;">
           Photos and measurements are recorded later from the Mudpuppies tab.</p>
       </div>
     </div>
     <div class="divider"></div>
 
-    <!-- Fish bycatch — manual species select + metrics + photos -->
+    <!-- Fish bycatch: manual species select + metrics + photos -->
     <div class="field-block">
       <div class="sp-header">
-        <span class="sec-label" style="margin-bottom:0;">Fish Bycatch</span>
+        <span class="sec-label" style="margin-bottom:0;">Fish bycatch</span>
         <button class="sp-add-btn" onclick="openSheet()">+ Add species</button>
       </div>
-      <p style="font-size:.68rem;color:var(--ink4);margin:.15rem 0 .55rem;line-height:1.5;">
+      <p style="font-size:1rem;color:var(--ink4);margin:.15rem 0 .55rem;line-height:1.5;">
         Select species, enter count / length / weight, and photograph each fish.
         Photos save to the designated Drive folder.</p>
       <div id="recent-sp-slot"></div>
@@ -240,7 +247,7 @@
     </div>
     <div id="ui-checkin-error"></div>
     <div class="submit-wrap">
-      <button class="primary-btn btn-checkin" id="submit-checkin-btn" onclick="submitCheckin()">Submit Check-in</button>
+      <button class="primary-btn btn-checkin" id="submit-checkin-btn" onclick="submitCheckin()">Review check-in</button>
     </div>
     <div id="ui-checkin-success"></div>
   </div>
@@ -270,6 +277,7 @@
 </div>
 
 <script src="config.js"></script>
+<script src="research.js"></script>
 <script src="db.js"></script>
 <script src="species-data.js"></script>
 <script src="app.js"></script>

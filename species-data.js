@@ -56,4 +56,4 @@ window.SURVEY_SITES = [
 ];
 
 // Trap IDs 26-01 .. 26-33 (change prefix per survey year as needed)
-window.TRAP_IDS = Array.from({length: 33}, (_, i) => "26-" + String(i + 1).padStart(2, "0"));
+window.TRAP_IDS = Array.from({length: 100}, (_, i) => "MP-" + String(i + 1).padStart(2, "0"));

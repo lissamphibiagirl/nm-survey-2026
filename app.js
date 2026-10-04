@@ -1,8 +1,8 @@
 // ============================================================
-// Fish Trap Survey — offline-first PWA
+// Fish Trap Survey: offline-first PWA
 // Fish bycatch: user selects species, enters count/length/weight,
 // uploads photos. Photos go to a dedicated Drive folder.
-// No iNaturalist AI — species selected manually from list.
+// No iNaturalist AI: species selected manually from list.
 // Drive folder for bycatch photos: 11MutIp3rVTGF8vrqAvL4f0_Rez_0AmuB
 // ============================================================
 
@@ -28,8 +28,23 @@ let _checkinReceipt = null;
 
 // ── helpers ────────────────────────────────────────────────
 function pad(n){ return String(n).padStart(2,"0"); }
-function todayISO(){ const d=new Date(); return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
-function nowTime(){ const d=new Date(); return pad(d.getHours())+":"+pad(d.getMinutes()); }
+function dateISO(d=new Date()){ return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); }
+function todayISO(){ return dateISO(); }
+function nowTime(d=new Date()){ return pad(d.getHours())+":"+pad(d.getMinutes()); }
+function setDateTimeInputs(dateId,timeId,d=new Date()){
+  const dateInput=$(dateId),timeInput=$(timeId);
+  if(dateInput) dateInput.value=dateISO(d);
+  if(timeInput) timeInput.value=nowTime(d);
+}
+function parseLocalDateTime(dateStr,timeStr){
+  const dateMatch=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr||""));
+  const timeMatch=/^(\d{2}):(\d{2})$/.exec(String(timeStr||""));
+  if(!dateMatch||!timeMatch) return null;
+  const [,year,month,day]=dateMatch.map(Number),[,hour,minute]=timeMatch.map(Number);
+  const d=new Date(year,month-1,day,hour,minute,0,0);
+  if(d.getFullYear()!==year||d.getMonth()!==month-1||d.getDate()!==day||d.getHours()!==hour||d.getMinutes()!==minute) return null;
+  return d;
+}
 function nowISO(){ return new Date().toISOString(); }
 function newId(p){ return p+"-"+Date.now()+"-"+Math.random().toString(36).slice(2,7); }
 function $(id){ return document.getElementById(id); }
@@ -43,24 +58,21 @@ function toast(msg,ms=3200){
 function fileToDataUrl(file){
   return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
 }
-function soakMins(deployTime,checkTime){
-  try{
-    const [dh,dm]=deployTime.split(":").map(Number);
-    const [ch,cm]=checkTime.split(":").map(Number);
-    let m=(ch*60+cm)-(dh*60+dm); if(m<0) m+=1440; return m;
-  }catch(e){ return null; }
+function soakMins(deployDate,deployTime,checkDate,checkTime){
+  const start=parseLocalDateTime(deployDate,deployTime),end=parseLocalDateTime(checkDate,checkTime);
+  if(!start||!end) return null;
+  return Math.round((end.getTime()-start.getTime())/60000);
 }
 function fmtSoak(mins){
   if(mins===null||mins===undefined||isNaN(mins)) return "--";
-  const h=Math.floor(mins/60),m=mins%60;
-  return h===0?m+"m":h+"h "+pad(m)+"m";
+  const abs=Math.abs(mins),h=Math.floor(abs/60),m=abs%60;
+  const text=h===0?m+"m":h+"h "+pad(m)+"m";
+  return mins<0?"Starts in "+text:text;
 }
-function elapsedMins(deployTime){
-  try{
-    const [h,m]=deployTime.split(":").map(Number);
-    const now=new Date();
-    return (now.getHours()*60+now.getMinutes())-(h*60+m);
-  }catch(e){ return 0; }
+function elapsedMins(deployDate,deployTime,now=new Date()){
+  const start=parseLocalDateTime(deployDate,deployTime);
+  if(!start) return null;
+  return Math.round((now.getTime()-start.getTime())/60000);
 }
 function buzz(pat){ if(navigator.vibrate){ try{ navigator.vibrate(pat); }catch(e){} } }
 
@@ -137,8 +149,8 @@ function buildSiteChips(){
 // ── form state ─────────────────────────────────────────────
 const state={
   deployTrap:"",deploySite:"",deployGpsLat:"",deployGpsLng:"",
-  checkinTrapId:"",checkinDeployRefId:"",checkinGpsLat:"",checkinGpsLng:"",
-  condClarity:"clear",condWeather:"sunny"
+  checkinTrapId:"",checkinDeployRefId:"",checkinDeployDate:"",checkinDeployTime:"",checkinGpsLat:"",checkinGpsLng:"",
+  condWeather:"sunny"
 };
 
 // ── GPS ────────────────────────────────────────────────────
@@ -157,7 +169,7 @@ function captureGPS(scope){
       const low=acc>GPS_ACCURACY_WARN_M;
       btn.classList.toggle("captured",!low); btn.classList.toggle("low-accuracy",low);
       $("gps-main-"+scope).textContent=lat+", "+lng;
-      $("gps-sub-"+scope).textContent=low?"+/-"+acc+"m — low accuracy, tap to retry":"+/-"+acc+"m  tap to refresh";
+      $("gps-sub-"+scope).textContent=low?"+/-"+acc+"m: low accuracy, tap to retry":"+/-"+acc+"m  tap to refresh";
       const tick=$("gps-tick-"+scope); tick.textContent=low?"!":"OK"; tick.style.opacity="1";
       ico.classList.remove("pulsing");
       if(scope==="deploy"){state.deployGpsLat=lat;state.deployGpsLng=lng;}
@@ -227,7 +239,7 @@ function renderSheet(){
   });
   if(!any){
     const e=document.createElement("div");
-    e.style.cssText="padding:2rem 1rem;text-align:center;color:var(--ink4);font-size:.82rem;";
+    e.style.cssText="padding:2rem 1rem;text-align:center;color:var(--ink4);font-size:0.9rem;";
     e.textContent=`No results for "${searchQ}"`;
     list.appendChild(e);
   }
@@ -255,7 +267,7 @@ function renderSpeciesCards(){
     const el=document.createElement("div");
     el.className="sp-card"+(card.count===0?" zero-warn":"");
 
-    // Thumbnail — first photo if any
+    // Thumbnail: first photo if any
     const firstPhoto=card.photos[0];
     const swatchStyle=firstPhoto?`style="background-image:url('${firstPhoto.dataUrl}');background-size:cover;"`:""
 
@@ -279,12 +291,12 @@ function renderSpeciesCards(){
             <div class="sp-metric">
               <label>Length (cm)</label>
               <input type="number" inputmode="decimal" value="${card.length_cm}"
-                onchange="updateField('${card.id}','length_cm',this.value)" placeholder="—">
+                onchange="updateField('${card.id}','length_cm',this.value)" placeholder="Optional">
             </div>
             <div class="sp-metric">
               <label>Weight (g)</label>
               <input type="number" inputmode="decimal" value="${card.weight_g}"
-                onchange="updateField('${card.id}','weight_g',this.value)" placeholder="—">
+                onchange="updateField('${card.id}','weight_g',this.value)" placeholder="Optional">
             </div>
           </div>
         </div>
@@ -425,7 +437,7 @@ function renderMudpuppyDetailForm(m){
     <div class="field-block" style="margin-top:.85rem;">
       <span class="sec-label">Photograph</span>
       <div class="mp-detail-photo" id="mp-detail-photo" style="cursor:pointer;${photoSrc?`background-image:url('${photoSrc}')`:""}" onclick="triggerMpDetailPhoto()">${photoSrc?"":"Tap to photograph"}</div>
-      <p style="font-size:.68rem;color:var(--ink4);margin-top:.38rem;line-height:1.5;">Taken at processing time, not at check-in.</p>
+      <p style="font-size:0.9rem;color:var(--ink4);margin-top:.38rem;line-height:1.5;">Taken at processing time, not at check-in.</p>
     </div>
     <div class="field-block">
       <span class="sec-label">Sex</span>
@@ -456,7 +468,7 @@ function renderMudpuppyDetailForm(m){
     </div>
     <div class="divider"></div>
     <div class="field-block">
-      <span class="sec-label">Swab Vial ID</span>
+      ${correctionButton("mudpuppy",m.id)}${deleteRecordButton("mudpuppy",m.id)}<span class="sec-label">Swab Vial ID</span>
       <input type="text" class="text-input" id="mp-swab" value="${m.swab_vial_id||""}" placeholder="e.g. SW-0142" autocomplete="off">
     </div>
     <div class="field-block">
@@ -489,6 +501,7 @@ function renderMudpuppyDetailForm(m){
 }
 
 async function saveMudpuppyDetail(id){
+  if(_dataMaintenance){ toast("Please wait for record cleanup to finish."); return; }
   const list=await mergedMudpuppies(),existing=list.find(x=>x.id===id)||{};
   const sexChip=document.querySelector("#ui-mudpuppy-detail .sex-chip.active");
   const glChip=document.querySelector("#ui-mudpuppy-detail .cond-tap.active[id^='gl-tap-']");
@@ -505,7 +518,7 @@ async function saveMudpuppyDetail(id){
   if(_mpDetailNewPhoto) updated.photo_base64=_mpDetailNewPhoto.base64;
   delete updated._pending;
   await DB.addPendingMudpuppy(updated); _mpDetailNewPhoto=null; buzz(40);
-  $("mp-save-toast-slot").innerHTML=`<div class="mp-save-toast">Saved${navigator.onLine?" — syncing now":" on device — syncs when online"}.</div>`;
+  $("mp-save-toast-slot").innerHTML=`<div class="mp-save-toast">Saved${navigator.onLine?": syncing now":" on device: syncs when online"}.</div>`;
   trySyncAll();
 }
 window.saveMudpuppyDetail=saveMudpuppyDetail;
@@ -537,18 +550,45 @@ async function mergedCheckins(){
 // ============================================================
 // HOME
 // ============================================================
+function checkinBelongsTo(c,d){
+  return c.deployment_ref_id ? c.deployment_ref_id===d.ref_id : c.trap_id===d.trap_id && `${c.checkin_date||""} ${c.checkin_time||""}`>=`${d.deploy_date||""} ${d.deploy_time||""}`;
+}
+function readSiteMeasurements(){
+  const result={};
+  for(const [id,key,label] of [["air-temp-input","air_temp_c","Air temperature"],["temp-input","water_temp_c","Water temperature"],["water-ph-input","water_ph","Water pH"]]){
+    const input=$(id),raw=input.value.trim();
+    if(input.validity?.badInput) throw new Error(`${label}: enter a valid number.`);
+    if(raw===""){ result[key]=""; continue; }
+    const value=Number(raw);
+    if(!Number.isFinite(value)) throw new Error(`${label}: enter a valid number.`);
+    if(key==="water_ph"&&(value<0||value>14)) throw new Error("Water pH must be between 0 and 14.");
+    result[key]=value;
+  }
+  return result;
+}
+function measurementHistoryHtml(c){
+  return [["air_temp_c","Air temperature"," °C"],["water_temp_c","Water temperature"," °C"],["water_ph","Water pH",""]].map(([key,label,unit])=>`<p>${label}: ${c[key]!==""&&c[key]!=null?escapeHtml(String(c[key]))+unit:"Not recorded"}</p>`).join("");
+}
+function checkinHistoryHtml(c){
+  const e=escapeHtml;
+  const species=Array.isArray(c.species)?c.species:[];
+  const rows=species.map(sp=>`<div class="success-row"><span>${e(sp.species||"")} ${sp.sci||sp.sci_name?`(${e(sp.sci||sp.sci_name)})`:""}</span><span>${e(String(sp.count||0))} caught${sp.length_cm?` · ${e(String(sp.length_cm))} cm`:""}${sp.weight_g?` · ${e(String(sp.weight_g))} g`:""}</span></div>`).join("");
+  return `<details class="success-card" style="margin:.65rem"><summary>${e(c.checkin_date||"")} ${e(c.checkin_time||"")} · View catch details</summary>${rows||"<p>No fish species recorded.</p>"}<p>Mudpuppies: ${e(String(c.mudpuppy_count||0))}</p>${c.observer?`<p>Observer: ${e(c.observer)}</p>`:""}${c.notes?`<p>Notes: ${e(c.notes)}</p>`:""}${measurementHistoryHtml(c)}<p>Sampling interval: ${c.interval_mins==null?"Not recorded":escapeHtml(String(c.interval_mins))+" min"} (${c.interval_basis==="previous_check"?"since previous check":"since deployment"})</p><p>Total time since deployment: ${e(fmtSoak(c.soak_mins))}</p>${correctionButton("checkin",c.ref_id)}${deleteRecordButton("checkin",c.ref_id)}</details>`;
+}
+
 async function renderHome(){
   const deps=await mergedDeployments(),checks=await mergedCheckins();
-  const doneRefs=new Set(checks.map(c=>c.deployment_ref_id).filter(Boolean));
-  const doneTrapDates=new Set(checks.map(c=>`${c.trap_id}:${c.checkin_date||""}`));
-  const isDone=d=>doneRefs.has(d.ref_id)||doneTrapDates.has(`${d.trap_id}:${d.deploy_date||""}`);
+  const isDone=d=>checks.some(c=>checkinBelongsTo(c,d)&&c.checkin_date===todayISO());
+  const pendingCount=(await DB.getPendingDeployments()).length+(await DB.getPendingCheckins()).length+(await DB.getPendingMudpuppies()).length;
+  const checked=deps.filter(isDone).length;
+  $("daily-dashboard").innerHTML=[['Deployed',deps.length],['Checked today',checked],['To check today',deps.length-checked],['Pending upload',pendingCount]].map(([label,n])=>`<div><strong>${n}</strong><span>${label}</span></div>`).join('');
   const dl=$("ui-deploy-list");
   if(!deps.length){
     dl.innerHTML=`<div class="empty-state"><div class="empty-state-text">No traps in this survey yet.<br>Tap "+ Deploy new trap" to begin.</div></div>`;
   } else {
     dl.innerHTML="";
     deps.forEach(d=>{
-      const done=isDone(d),em=(d.deploy_date&&d.deploy_date!==todayISO())?null:elapsedMins(d.deploy_time);
+      const done=isDone(d),em=elapsedMins(d.deploy_date,d.deploy_time);
       const card=document.createElement("div"); card.className="trap-card "+(done?"st-done":"st-deployed");
       card.onclick=()=>{ state.viewTrap=d.trap_id; renderDeployDetail(d.ref_id); showScreen("screen-deploy-detail"); };
       card.innerHTML=`<div class="trap-card-inner">
@@ -557,20 +597,20 @@ async function renderHome(){
           <div class="trap-card-id">Trap ${d.trap_id}</div>
           <div class="trap-card-meta">${d.site||""} | ${d.deploy_date||""} ${d.deploy_time||""}${d.gps_lat?` | ${d.gps_lat}, ${d.gps_lng}`:""}</div>
         </div>
-        ${done?`<div class="trap-badge-done">Done</div>`:`<div class="trap-badge-soak">${em===null?"Awaiting check-in":fmtSoak(em)}</div>`}
+        ${done?`<div class="trap-badge-done">Checked today</div>`:`<div class="trap-badge-soak">${em===null?"Awaiting check-in":fmtSoak(em)}</div>`}
         ${d._pending?`<div class="trap-badge-pending">sync pending</div>`:""}
         <div class="trap-card-arrow">›</div>
       </div>`;
       dl.appendChild(card);
     });
   }
-  const cl=$("ui-checkin-list"),pendingTraps=deps.filter(d=>!isDone(d));
+  const cl=$("ui-checkin-list"),pendingTraps=deps;
   if(!pendingTraps.length){
-    cl.innerHTML=`<div class="empty-state"><div class="empty-state-text">${deps.length?"All deployed traps have been checked in.":"No deployments yet — switch to Deploy first."}</div></div>`;
+    cl.innerHTML=`<div class="empty-state"><div class="empty-state-text">${deps.length?"All deployed traps have been checked in.":"No deployments yet: switch to Deploy first."}</div></div>`;
   } else {
     cl.innerHTML="";
     pendingTraps.forEach(d=>{
-      const em=(d.deploy_date&&d.deploy_date!==todayISO())?null:elapsedMins(d.deploy_time);
+      const em=elapsedMins(d.deploy_date,d.deploy_time);
       const card=document.createElement("div"); card.className="trap-card st-deployed";
       card.onclick=()=>startCheckin(d.ref_id);
       card.innerHTML=`<div class="trap-card-inner">
@@ -590,15 +630,16 @@ async function renderHome(){
     const mudpuppies=await mergedMudpuppies();
     dn.innerHTML=`<span class="trap-list-lbl" style="margin-top:.55rem;display:block;">Completed check-ins</span>`;
     checks.forEach(c=>{
-      const mpForTrap=mudpuppies.filter(m=>m.trap_id===c.trap_id);
-      const card=document.createElement("div"); card.className="trap-card"; card.style.opacity=".8";
+      const mpForTrap=mudpuppies.filter(m=>m.checkin_ref_id===c.ref_id);
+      const card=document.createElement("div"); card.className="trap-card"; card.style.opacity="1";
       card.innerHTML=`<div class="trap-card-inner">
         <div class="trap-status-dot dot-done"></div>
         <div class="trap-card-info"><div class="trap-card-id">Trap ${c.trap_id}</div>
-          <div class="trap-card-meta">Check-in ${c.checkin_date||""} ${c.checkin_time||""}${c._pending?" — upload pending":""}</div></div>
+          <div class="trap-card-meta">Check-in ${c.checkin_date||""} ${c.checkin_time||""}${c._pending?": upload pending":""}</div></div>
         ${mpForTrap.length?`<div class="trap-badge-mudpuppy" onclick="event.stopPropagation();switchMode('mudpuppies');showScreen('screen-home');">${mpForTrap.length} mudpuppy${mpForTrap.length>1?"s":""}</div>`:""}
         <div class="trap-badge-done">Done</div>
       </div>`;
+      card.insertAdjacentHTML("beforeend", checkinHistoryHtml(c));
       dn.appendChild(card);
     });
   }
@@ -609,23 +650,23 @@ async function renderDeployDetail(deployRefId){
   const el=$("ui-deploy-detail");
   if(!dep){ el.innerHTML="<p>Trap not found.</p>"; return; }
   const checks=await mergedCheckins();
-  const checked=checks.some(c=>c.deployment_ref_id===dep.ref_id||(!c.deployment_ref_id&&c.trap_id===dep.trap_id&&c.checkin_date===dep.deploy_date));
-  const em=dep.deploy_date&&dep.deploy_date!==todayISO()?null:elapsedMins(dep.deploy_time);
+  const trapChecks=checks.filter(c=>checkinBelongsTo(c,dep));
+  const em=elapsedMins(dep.deploy_date,dep.deploy_time);
   el.innerHTML=`
     <div class="hero deploy" style="margin-top:.2rem;">
       <div class="hero-eyebrow">Deployed</div>
       <div class="hero-title">Trap ${dep.trap_id}</div>
-      <div class="hero-sub">${dep.site||""} | ${dep.deploy_date||""} | ${checked?"check-in complete":"awaiting check-in"}</div>
+      <div class="hero-sub">${dep.site||""} | ${dep.deploy_date||""} | ${trapChecks.length} check-ins recorded</div>
     </div>
     <div class="field-block" style="margin-top:.85rem;">
       <div class="soak-card">
         <div class="soak-icon">SOAK</div>
-        <div class="soak-info"><div class="soak-lbl">Time in water</div><div class="soak-val">${em===null?`Set ${dep.deploy_date||""} ${dep.deploy_time||""}`:`Set ${dep.deploy_time} → now`}</div></div>
-        <div class="soak-badge">${em===null?"—":fmtSoak(em)}</div>
+        <div class="soak-info"><div class="soak-lbl">Time in water</div><div class="soak-val">${em===null?"Deployment date/time unavailable":em<0?`Scheduled for ${dep.deploy_date} ${dep.deploy_time}`:`Set ${dep.deploy_date} ${dep.deploy_time} → now`}</div></div>
+        <div class="soak-badge">${fmtSoak(em)}</div>
       </div>
     </div>
     <div class="field-block">
-      <span class="sec-label">Deployment Details</span>
+      <span class="sec-label">Deployment Details</span>${correctionButton("deployment",dep.ref_id)}${deleteRecordButton("deployment",dep.ref_id)}
       <div class="success-card">
         <div class="success-row"><span>Trap</span><span class="success-row-val">${dep.trap_id}</span></div>
         <div class="success-row"><span>Survey Site</span><span class="success-row-val">${dep.site||""}</span></div>
@@ -634,7 +675,8 @@ async function renderDeployDetail(deployRefId){
         ${dep.notes?`<div class="success-row"><span>Notes</span><span class="success-row-val">${dep.notes}</span></div>`:""}
       </div>
     </div>
-    ${checked?"":`<div class="submit-wrap"><button class="primary-btn btn-checkin" onclick="startCheckin('${dep.ref_id}')">Check in this trap</button></div>`}`;
+    <div class="submit-wrap"><button class="primary-btn btn-checkin" onclick="startCheckin('${dep.ref_id}')">Log another check-in</button></div>
+    <div class="field-block"><span class="sec-label">Catch history: all days</span>${trapChecks.length?trapChecks.map(checkinHistoryHtml).join(""):"<p>No check-ins yet.</p>"}</div>`;
 }
 
 window.startCheckin=async function(trapId){
@@ -664,52 +706,73 @@ window.startCheckin=async function(trapId){
   $("ui-checkin-hero").innerHTML=`
     <div class="hero checkin" style="margin-top:.2rem;">
       <div class="hero-eyebrow">Check-in</div>
-      <div class="hero-title">Trap ${trapId}</div>
-      <div class="hero-sub">${site} | deployed ${depTime}</div>
+      <div class="hero-title">Trap ${dep.trap_id}</div>
+      <div class="hero-sub">${site} | deployed ${dep.deploy_date||""} ${depTime}</div>
     </div>`;
-  const ct=nowTime();
-  $("d-checkin-date").textContent=new Date().toDateString().slice(4);
-  $("d-checkin-time").textContent=ct;
-  const mins=dep?soakMins(dep.deploy_time,ct):null;
-  $("d-soak-badge").textContent=fmtSoak(mins);
-  $("d-soak-val").textContent=dep?`${dep.deploy_time} -> ${ct}`:"No deployment found";
+  state.checkinDeployDate=dep.deploy_date||"";
+  state.checkinDeployTime=dep.deploy_time||"";
+  ["air-temp-input","temp-input","water-ph-input"].forEach(id=>$(id).value="");
+  setDateTimeInputs("checkin-date-input","checkin-time-input");
+  updateCheckinSoakPreview();
   renderSpeciesCards();
   renderRecentSpecies();
   showScreen("screen-checkin-form");
 };
 
+function updateCheckinSoakPreview(){
+  const date=$("checkin-date-input")?.value||"",time=$("checkin-time-input")?.value||"";
+  const mins=soakMins(state.checkinDeployDate,state.checkinDeployTime,date,time);
+  $("d-soak-badge").textContent=fmtSoak(mins);
+  $("d-soak-val").textContent=`${state.checkinDeployDate||"--"} ${state.checkinDeployTime||"--:--"} → ${date||"--"} ${time||"--:--"}`;
+}
+window.updateCheckinSoakPreview=updateCheckinSoakPreview;
+
+function openDeployForm(){
+  setDateTimeInputs("deploy-date-input","deploy-time-input");
+  $("ui-deploy-error").innerHTML="";
+  $("ui-deploy-success").innerHTML="";
+  showScreen("screen-deploy-form");
+}
+window.openDeployForm=openDeployForm;
+
 // ============================================================
 // SUBMIT: DEPLOY
 // ============================================================
 async function submitDeploy(forceDuplicate){
+  if(_dataMaintenance){ toast("Please wait for record cleanup to finish."); return; }
   const trap=state.deployTrap,site=state.deploySite||"Unknown";
+  const deployDate=$("deploy-date-input").value,deployTime=$("deploy-time-input").value;
   const lat=state.deployGpsLat,lng=state.deployGpsLng;
   const notes=$("deploy-notes").value.trim();
   const errs=[];
   if(!trap) errs.push("Please select a trap number.");
+  if(!deployDate) errs.push("Please choose a deployment date.");
+  if(!deployTime) errs.push("Please choose a deployment time.");
+  if(deployDate&&deployTime&&!parseLocalDateTime(deployDate,deployTime)) errs.push("Choose a valid deployment date and time.");
   if(!lat||!lng) errs.push("GPS coordinates are required.");
   if(errs.length){ $("ui-deploy-error").innerHTML=`<div class="err-box"><div class="err-title">${errs.length} field${errs.length>1?"s":""} need attention:</div><ul class="err-list">${errs.map(e=>`<li>${e}</li>`).join("")}</ul></div>`; return; }
   if(!forceDuplicate){
-    const deps=await mergedDeployments(),existing=deps.find(d=>d.trap_id===trap&&d.deploy_date===todayISO());
-    if(existing){ $("ui-deploy-error").innerHTML=`<div class="confirm-box"><p>Trap ${trap} already deployed today at ${existing.deploy_time}. Log a second deployment?</p><div class="confirm-btns"><button class="confirm-yes" onclick="submitDeploy(true)">Yes</button><button class="confirm-no" onclick="$('ui-deploy-error').innerHTML=''">Cancel</button></div></div>`; return; }
+    const deps=await mergedDeployments(),existing=deps.find(d=>d.trap_id===trap);
+    if(existing){ toast(`Trap ${trap} is already deployed. Use Check-in to log another catch.`,5000); return; }
   }
   $("ui-deploy-error").innerHTML="";
-  const depTime=nowTime();
-  const rec={ref_id:newId("DEP"),submitted_at:nowISO(),trap_id:trap,site,deploy_date:todayISO(),deploy_time:depTime,gps_lat:lat,gps_lng:lng,notes};
+  const rec={ref_id:newId("DEP"),submitted_at:nowISO(),trap_id:trap,site,deploy_date:deployDate,deploy_time:deployTime,gps_lat:lat,gps_lng:lng,notes};
+  Object.assign(rec,projectMetadata());
+  if(!await reviewRecord("Review deployment",rec))return;
   await DB.addPendingDeployment(rec);
   resetDeployForm(); buzz(40); trySyncAll(); renderHome();
   $("ui-deploy-success").innerHTML=`
     <div class="success-panel">
       <div class="success-icon deploy-icon">DEPLOYED</div>
       <div class="success-title deploy-color">Trap ${trap} deployed</div>
-      <div class="success-sub">Soak timer started. Saved on device${navigator.onLine?" and syncing now.":" — syncs when online."}</div>
+      <div class="success-sub">Deployment saved on device${navigator.onLine?" and syncing now.":": syncs when online."}</div>
       <div class="success-card">
         <div class="success-row"><span>Trap</span><span class="success-row-val">${trap}</span></div>
         <div class="success-row"><span>Survey Site</span><span class="success-row-val">${site}</span></div>
-        <div class="success-row"><span>Deployed</span><span class="success-row-val">${todayISO()} ${depTime}</span></div>
+        <div class="success-row"><span>Deployed</span><span class="success-row-val">${deployDate} ${deployTime}</span></div>
         <div class="success-row"><span>GPS</span><span class="success-row-val">${lat}, ${lng}</span></div>
       </div>
-      <button class="action-btn primary-deploy" onclick="$('ui-deploy-success').innerHTML='';showScreen('screen-deploy-form');">Deploy next trap</button>
+      <button class="action-btn primary-deploy" onclick="openDeployForm()">Deploy next trap</button>
       <button class="action-btn secondary" onclick="$('ui-deploy-success').innerHTML='';showScreen('screen-home');switchMode('deploy');">Back to overview</button>
     </div>`;
 }
@@ -723,6 +786,7 @@ function resetDeployForm(){
   $("gps-main-deploy").textContent="Tap to capture location";
   $("gps-tick-deploy").style.opacity="0";
   $("deploy-notes").value="";
+  setDateTimeInputs("deploy-date-input","deploy-time-input");
 }
 
 // ============================================================
@@ -744,10 +808,11 @@ function renderCheckinReceipt(){
       <div class="success-title checkin-color">Trap ${escapeHtml(r.trap)} checked in</div>
       ${uploadMessage}
       <div class="success-card">
+        <div class="success-row"><span>Checked in</span><span class="success-row-val">${escapeHtml(r.checkinDate||"")} ${escapeHtml(r.checkinTime||"")}</span></div>
         <div class="success-row"><span>Soak time</span><span class="success-row-val">${fmtSoak(r.mins)}</span></div>
         <div class="success-row"><span>Bycatch</span><span class="success-row-val">${r.speciesCount?r.speciesCount+" species | "+r.totalFish+" fish":"None"}</span></div>
         ${r.flagN>0?`<div class="success-row"><span>Flagged</span><span class="success-row-val" style="color:var(--amber-lt);">${r.flagN} entr${r.flagN===1?"y":"ies"}</span></div>`:""}
-        ${r.mpSnap&&r.mpCount>0?`<div class="success-row"><span>Mudpuppies</span><span class="success-row-val" style="color:var(--clay-lt);">${r.mpCount} — add metadata in Mudpuppies tab</span></div>`:""}
+        ${r.mpSnap&&r.mpCount>0?`<div class="success-row"><span>Mudpuppies</span><span class="success-row-val" style="color:var(--clay-lt);">${r.mpCount}: add metadata in Mudpuppies tab</span></div>`:""}
       </div>
       ${nextAction}
     </div>`;
@@ -756,8 +821,8 @@ function renderCheckinReceipt(){
 
 function saveCheckinReceipt(){
   try{
-    if(_checkinReceipt) localStorage.setItem("fishtrap_checkin_receipt",JSON.stringify(_checkinReceipt));
-    else localStorage.removeItem("fishtrap_checkin_receipt");
+    if(_checkinReceipt) localStorage.setItem(("fishtrap_checkin_receipt"+DATA_SUFFIX),JSON.stringify(_checkinReceipt));
+    else localStorage.removeItem(("fishtrap_checkin_receipt"+DATA_SUFFIX));
   }catch(e){}
 }
 
@@ -779,6 +844,7 @@ async function refreshCheckinReceipt(){
 }
 
 async function submitCheckin(){
+  if(_dataMaintenance){ toast("Please wait for record cleanup to finish."); return; }
   if(_checkinSubmitting) return;
   const trap=state.checkinTrapId;
   const errs=[];
@@ -792,11 +858,18 @@ async function submitCheckin(){
     const deps=await mergedDeployments(),dep=deps.find(d=>d.ref_id===state.checkinDeployRefId)||deps.find(d=>d.trap_id===trap);
     const depTime=dep?dep.deploy_time:"";
     const site=dep?(dep.site||dep.watershed||"Unknown"):"Unknown";
-    const checkinTime=nowTime(),mins=soakMins(depTime,checkinTime);
+    const checkinDate=$("checkin-date-input").value,checkinTime=$("checkin-time-input").value;
+    if(!checkinDate||!checkinTime) throw new Error("Choose a check-in date and time.");
+    if(!parseLocalDateTime(checkinDate,checkinTime)) throw new Error("Choose a valid check-in date and time.");
+    const mins=soakMins(dep?dep.deploy_date:"",depTime,checkinDate,checkinTime);
+    if(mins===null) throw new Error("The deployment date or time is missing or invalid.");
+    if(mins<0) throw new Error("Check-in time cannot be earlier than the deployment time.");
+    const measurements=readSiteMeasurements();
     const totalFish=currentSpecies.reduce((a,c)=>a+(parseInt(c.count)||0),0);
     const flagN=currentSpecies.filter(c=>c.flagged).length;
+    if(currentSpecies.some(c=>!Number.isInteger(Number(c.count))||Number(c.count)<1)) throw new Error("Every species count must be a positive whole number.");
     const speciesPayload=currentSpecies.map((c,i)=>({
-      species:c.name,sci:c.sci,count:parseInt(c.count)||1,
+      species:c.name,sci:c.sci,count:parseInt(c.count),
       length_cm:c.length_cm||"",weight_g:c.weight_g||"",flagged:c.flagged,
       sample_id:`${ref}_${slug(c.name)}_${i}`,
       photo_base64:c.photos.length>0?c.photos[0].base64:null,
@@ -804,25 +877,33 @@ async function submitCheckin(){
     }));
     const rec={
       ref_id:ref,deployment_ref_id:state.checkinDeployRefId,submitted_at:nowISO(),
-      checkin_date:todayISO(),checkin_time:checkinTime,trap_id:trap,site,
+      checkin_date:checkinDate,checkin_time:checkinTime,trap_id:trap,site,
       deploy_time:depTime,soak_mins:mins,gps_lat:state.checkinGpsLat,gps_lng:state.checkinGpsLng,
-      clarity:state.condClarity,weather:state.condWeather,water_temp_c:$("temp-input").value,
+      weather:state.condWeather,...measurements,
       notes:$("checkin-notes").value.trim(),observer:$("observer-name").value.trim(),
       mudpuppy_caught:mudpuppyCaught,mudpuppy_count:mudpuppyCaught?mudpuppyCount:0,species:speciesPayload
     };
 
+    rec.catch_status=totalFish===0&&!mudpuppyCaught?'no_animals_caught':'animals_caught';
+    const previous=(await mergedCheckins()).filter(c=>checkinBelongsTo(c,dep)&&`${c.checkin_date} ${c.checkin_time}`<`${checkinDate} ${checkinTime}`).sort((a,b)=>`${b.checkin_date} ${b.checkin_time}`.localeCompare(`${a.checkin_date} ${a.checkin_time}`))[0];
+    rec.previous_checkin_ref_id=previous?.ref_id||'';
+    rec.interval_mins=previous?soakMins(previous.checkin_date,previous.checkin_time,checkinDate,checkinTime):mins;
+    rec.interval_basis=previous?'previous_check':'deployment';
+    Object.assign(rec,projectMetadata());
+    if(!rec.observer) throw new Error('Enter the observer name.');
+    if(!await reviewRecord('4. Review check-in',rec)) return;
     await DB.addPendingCheckin(rec);
     addToRecentSpecies(currentSpecies);
     const mpSnap=mudpuppyCaught,mpCount=mudpuppyCount;
     if(mudpuppyCaught&&mudpuppyCount>0){
       for(let i=0;i<mudpuppyCount;i++) await DB.addPendingMudpuppy({
         id:newId("MP"),trap_id:trap,checkin_ref_id:ref,site,
-        catch_date:todayISO(),individual_index:i+1,total_in_catch:mudpuppyCount,
+        catch_date:checkinDate,individual_index:i+1,total_in_catch:mudpuppyCount,
         photo_base64:null,sex:"",weight_g:"",svl_mm:"",swab_vial_id:"",pit_tag_id:"",tissue_vial_id:"",
         notes:"",submitted_at:nowISO(),updated_at:nowISO()
       });
     }
-    _checkinReceipt={ref,trap,mins,totalFish,speciesCount:speciesPayload.length,flagN,mpSnap,mpCount,uploaded:false,message:navigator.onLine?"Uploading record…":"Waiting for a connection."};
+    _checkinReceipt={ref,trap,checkinDate,checkinTime,mins,totalFish,speciesCount:speciesPayload.length,flagN,mpSnap,mpCount,uploaded:false,message:navigator.onLine?"Uploading record…":"Waiting for a connection."};
     saveCheckinReceipt();
     resetCheckinForm(); buzz(40); renderCheckinReceipt(); await renderHome();
     const syncResult=await trySyncAll();
@@ -867,7 +948,7 @@ function showClearConfirm(){
 window.showClearConfirm=showClearConfirm;
 async function confirmClear(){
   $("ui-clear-confirm").innerHTML="";
-  if(!navigator.onLine){ toast("You're offline — connect to clear/archive."); return; }
+  if(!navigator.onLine){ toast("You're offline: connect to clear/archive."); return; }
   try{
     await trySyncAll();
     const pendingLists=await Promise.all([DB.getPendingDeployments(),DB.getPendingCheckins(),DB.getPendingMudpuppies()]);
@@ -880,6 +961,55 @@ async function confirmClear(){
 window.confirmClear=confirmClear;
 
 // ============================================================
+// Record cleanup: only enabled by an explicit, confirmed user action.
+let _dataMaintenance=false;
+function deleteRecordButton(kind,id){
+  if(!id) return "";
+  return `<button type="button" class="delete-record-btn" data-delete-kind="${kind}" data-delete-id="${escapeHtml(String(id))}">Delete this ${kind==='deployment'?'deployment':kind==='checkin'?'check-in':'specimen record'}</button>`;
+}
+document.addEventListener("click",event=>{
+  const button=event.target.closest("[data-delete-kind]");
+  if(button){ event.stopPropagation(); deleteSurveyRecord(button.dataset.deleteKind,button.dataset.deleteId); }
+});
+async function deleteSurveyRecord(kind,id){
+  if(_dataMaintenance) return;
+  const scope=kind==='deployment'?"this deployment and all of its linked check-ins, catches and specimen records":kind==='checkin'?"this check-in and its linked catches and specimen records":"this individual specimen record (the check-in catch count stays unchanged)";
+  if(!window.confirm(`Permanently delete ${scope}? This also removes matching pending records on this device. Other records are kept. Drive photos are kept. This cannot be undone.`)) return;
+  await performRecordCleanup(kind,id);
+}
+window.deleteAllSurveyData=async function(){
+  if(_dataMaintenance) return;
+  if(window.prompt("Dataset: "+DATA_MODE.toUpperCase()+". Permanently delete ALL survey records, including deployments, check-ins, catches, mudpuppies, archived history and pending records on this device? This includes real data, not only tests. Drive photos are kept. Type DELETE ALL to continue.")!=="DELETE ALL") return;
+  await performRecordCleanup("all","");
+};
+async function performRecordCleanup(kind,id){
+  if(_checkinSubmitting){ toast("Wait for the check-in save to finish before deleting records.",5000); return; }
+  if(!navigator.onLine){ toast("Connect to the internet to delete records from both the app and spreadsheet.",5000); return; }
+  _dataMaintenance=true;
+  try {
+    if(_syncInFlight) await _syncInFlight;
+    const deps=await mergedDeployments(),checks=await mergedCheckins();
+    const dep=deps.find(d=>d.ref_id===id);
+    const removedChecks=new Set(kind==='all'?checks.map(c=>c.ref_id):kind==='checkin'?[id]:kind==='deployment'&&dep?checks.filter(c=>checkinBelongsTo(c,dep)).map(c=>c.ref_id):[]);
+    const resp=await callServer(kind==='all'?"deleteAll":"deleteRecord",kind==='all'?{confirmation:"DELETE ALL"}:{kind,id});
+    if(!resp||!resp.ok) throw new Error(resp?.message||"Deletion was not confirmed. Update and deploy the latest Code.gs.");
+    (resp.deleted_checkins||[]).forEach(ref=>removedChecks.add(ref));
+    for(const r of await DB.getPendingDeployments()) if(kind==='all'||kind==='deployment'&&r.ref_id===id) await DB.removePendingDeployment(r.ref_id);
+    for(const r of await DB.getPendingCheckins()) if(kind==='all'||removedChecks.has(r.ref_id)) await DB.removePendingCheckin(r.ref_id);
+    const keepMp=r=>!(kind==='all'||kind==='mudpuppy'&&r.id===id||removedChecks.has(r.checkin_ref_id));
+    for(const r of await DB.getPendingMudpuppies()) if(!keepMp(r)) await DB.removePendingMudpuppy(r.id);
+    serverToday={deployments:(serverToday.deployments||[]).filter(r=>!(kind==='all'||kind==='deployment'&&r.ref_id===id)),checkins:(serverToday.checkins||[]).filter(r=>kind!=='all'&&!removedChecks.has(r.ref_id))};
+    await DB.cacheServer(serverToday);
+    await DB.cacheMudpuppies((await DB.getMudpuppyCache()||[]).filter(keepMp));
+    if(kind==='all'||_checkinReceipt&&removedChecks.has(_checkinReceipt.ref)){ _checkinReceipt=null; saveCheckinReceipt(); }
+    if(kind==='all'){ currentSpecies=[]; addedSpeciesNames.clear(); }
+    await renderHome(); await renderMudpuppyList(); await updateStatusBar(); await renderSyncIssues();
+    showScreen("screen-home");
+    toast(kind==='all'?"All survey records deleted. Ready for a clean test.":"Record deleted.",5000);
+  } catch(e){ toast("Cleanup error: "+e.message,7000); }
+  finally { _dataMaintenance=false; }
+}
+
 // SERVER COMMUNICATION
 // ============================================================
 function getAppsScriptUrl(){
@@ -894,22 +1024,24 @@ async function fetchServerJson(url,options){
   catch(e){ throw new Error("Apps Script returned an unreadable response. Check the web app deployment and permissions."); }
 }
 async function callServer(action,payload){
+  const capability=await fetchServerJson(getAppsScriptUrl()+"?action=capabilities&mode="+DATA_MODE);
+  if(!capability?.ok||capability.version!==8) throw new Error("Update and redeploy Code.gs before saving or deleting records.");
   return fetchServerJson(getAppsScriptUrl(),{
     method:"POST",
     headers:{"Content-Type":"text/plain;charset=utf-8"},
-    body:JSON.stringify({action,payload})
+    body:JSON.stringify({action,payload,mode:DATA_MODE,client_version:8})
   });
 }
 async function refreshFromServer(){
   try{
-    const data=await fetchServerJson(getAppsScriptUrl()+"?action=today");
-    if(data&&data.ok){ serverToday={deployments:data.deployments||[],checkins:data.checkins||[]}; await DB.cacheServer(serverToday); return {ok:true}; }
-    return {ok:false,message:(data&&data.message)||"Apps Script did not return the survey history."};
+    const data=await fetchServerJson(getAppsScriptUrl()+"?action=survey&mode="+DATA_MODE);
+    if(data&&data.ok&&data.history_version===3){ serverToday={deployments:data.deployments||[],checkins:data.checkins||[]}; await DB.cacheServer(serverToday); return {ok:true}; }
+    return {ok:false,message:"Update and redeploy Code.gs to enable all-days survey history."};
   }catch(e){ return {ok:false,message:e.message||"Could not load the survey history."}; }
 }
 async function refreshMudpuppiesFromServer(){
   try{
-    const data=await fetchServerJson(getAppsScriptUrl()+"?action=mudpuppies");
+    const data=await fetchServerJson(getAppsScriptUrl()+"?action=mudpuppies&mode="+DATA_MODE);
     if(data&&data.ok){ await DB.cacheMudpuppies(data.mudpuppies||[]); return {ok:true}; }
     return {ok:false,message:(data&&data.message)||"Apps Script did not return mudpuppy records."};
   }catch(e){ return {ok:false,message:e.message||"Could not load mudpuppy records."}; }
@@ -926,7 +1058,10 @@ function updateSyncModeLabel(){
 }
 
 async function trySyncAll(){
+  if(_dataMaintenance) return {ok:false,message:"Record cleanup in progress.",outcomes:{}};
   if(_syncInFlight){ _syncAgain=true; return _syncInFlight; }
+  const capability=await fetchServerJson(getAppsScriptUrl()+"?action=capabilities&mode="+DATA_MODE).catch(()=>null);
+  if(!capability?.ok||capability.version!==8){toast("Update and redeploy Code.gs before uploading this version.",6000);return {ok:false,outcomes:{},message:"Backend update required."};}
   const attempted=new Set(),outcomes={};
   _syncInFlight=(async()=>{
     let result={ok:false,message:"No sync pass completed.",outcomes:{}};
@@ -960,7 +1095,15 @@ async function runSyncCycle(attempted){
       attempted.add(outcomeKey);
       try{
         const resp=await callServer(action,item);
-        if(resp&&resp.ok){ await remove(item[idKey]); outcomes[outcomeKey]={ok:true}; }
+        if(resp&&resp.ok){
+          // Preserve confirmed uploads locally even if the following history fetch fails.
+          if(action==="deploy"||action==="checkin"){
+            const field=action==="deploy"?"deployments":"checkins";
+            serverToday[field]=[...(serverToday[field]||[]).filter(r=>r.ref_id!==item.ref_id),item];
+            await DB.cacheServer(serverToday);
+          }
+          await remove(item[idKey]); outcomes[outcomeKey]={ok:true};
+        }
         else{
           const message=(resp&&resp.message)||"Server rejected record.";
           rejected++; if(!syncError) syncError=message;
@@ -1024,7 +1167,7 @@ async function renderSyncIssues(){
   }
   slot.innerHTML=`<div class="sync-issues-banner">
     <div class="sync-issues-head"><span>${issues.length} record${issues.length>1?"s":""} need attention</span></div>
-    ${issues.map(iss=>`<div class="sync-issue-item">${escapeHtml(iss.type)} — ${escapeHtml(iss.label)}<div class="msg">${escapeHtml(iss.msg)}</div>
+    ${issues.map(iss=>`<div class="sync-issue-item">${escapeHtml(iss.type)}: ${escapeHtml(iss.label)}<div class="msg">${escapeHtml(iss.msg)}</div>
       <div class="sync-issue-auto">Retry after reconnecting, reopening the app, or saving another record.</div></div>`).join("")}
   </div>`;
 }
@@ -1032,7 +1175,7 @@ async function renderSyncIssues(){
 async function updateStatusBar(){
   const online=navigator.onLine;
   $("status-dot").className="status-dot "+(online?"online":"offline");
-  $("status-text").textContent=online?"Online":"Offline — entries saved on this device";
+  $("status-text").textContent=online?"Online":"Offline: entries saved on this device";
   const deps=await DB.getPendingDeployments(),checks=await DB.getPendingCheckins(),mps=await DB.getPendingMudpuppies();
   const n=deps.length+checks.length+mps.length;
   $("status-pending").textContent=n?`${n} pending sync`:"";
@@ -1050,7 +1193,7 @@ if("serviceWorker" in navigator){
 window.addEventListener("online",()=>trySyncAll());
 window.addEventListener("offline",()=>{ updateStatusBar(); updateSyncModeLabel(); });
 
-// ── ALL EVENT LISTENERS — inside DOMContentLoaded ──────────
+// ── ALL EVENT LISTENERS: inside DOMContentLoaded ──────────
 document.addEventListener("DOMContentLoaded", ()=>{
 
   // Species photo input (one photo per tap, attached to current card)
@@ -1064,7 +1207,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
       if(card){ card.photos.push({dataUrl,base64:dataUrl.split(",")[1]}); }
       _photoTargetId=null;
       renderSpeciesCards();
-      toast("Photo saved — uploads to Drive on sync.");
+      toast("Photo saved: uploads to Drive on sync.");
     });
   }
 
@@ -1081,20 +1224,24 @@ document.addEventListener("DOMContentLoaded", ()=>{
     });
   }
 
+  ["checkin-date-input","checkin-time-input"].forEach(id=>{
+    const input=$(id);
+    if(input) input.addEventListener("input",updateCheckinSoakPreview);
+  });
+
   // init
   (async ()=>{
     // Restore theme preference
     try{
       const saved=localStorage.getItem("fishtrap_theme");
-      if(saved==="day"){
-        document.documentElement.setAttribute("data-theme","day");
-        $("theme-icon").textContent="☽";
-        $("theme-label").textContent="Night mode";
+      if(saved==="day"||saved==="night"){
+        document.documentElement.setAttribute("data-theme",saved);
+        $("theme-icon").textContent=saved==="day"?"☽":"☀";
+        $("theme-label").textContent=saved==="day"?"Night mode":"Day mode";
       }
     }catch(e){}
 
-    $("d-deploy-date").textContent=new Date().toDateString().slice(4);
-    $("d-deploy-time").textContent=nowTime();
+    setDateTimeInputs("deploy-date-input","deploy-time-input");
     buildTrapDropdown();
     buildSiteChips();
     buildSheetTabs();
@@ -1102,7 +1249,7 @@ document.addEventListener("DOMContentLoaded", ()=>{
     const cached=await DB.getServerCache();
     if(cached) serverToday=cached;
     try{
-      const savedReceipt=localStorage.getItem("fishtrap_checkin_receipt");
+      const savedReceipt=localStorage.getItem(("fishtrap_checkin_receipt"+DATA_SUFFIX));
       if(savedReceipt) _checkinReceipt=JSON.parse(savedReceipt);
     }catch(e){ _checkinReceipt=null; }
 

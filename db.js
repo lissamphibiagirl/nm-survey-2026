@@ -8,7 +8,7 @@
 //                          "mudpuppies" (full history, not date-limited since
 //                          metadata is often filled in later)
 // ============================================================
-const DB_NAME = "fishtrap_db";
+const DB_NAME = "fishtrap_db" + DATA_SUFFIX;
 const DB_VERSION = 2;
 let _dbPromise = null;
 
